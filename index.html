@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>µkernel — a microkernel-style web runtime</title>
+
+  <link rel="stylesheet" href="./css/app.css" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="description" content="A microkernel-style runtime in the browser: message passing, fault isolation, supervision, hot swap, and location transparency — live." />
+  <link rel="icon" type="image/png" href="./icons/favicon.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="µkernel" />
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <h1>µ<b>kernel</b></h1>
+      <span class="sub">microkernel patterns, running in your browser</span>
+    </div>
+    <div class="metrics">
+      <div class="metric"><b id="m-msgs">0</b>messages routed</div>
+      <div class="metric"><b id="m-restarts">0</b>reincarnations</div>
+      <div class="metric"><b id="m-rejects">0</b>policy denials</div>
+      <div class="metric"><b id="m-uptime">0s</b>uptime</div>
+      <span class="mode-badge" id="mode-badge">isolation: web workers</span>
+    </div>
+  </header>
+
+  <!-- SIGNATURE: live message bus tape -->
+  <div class="tape-shell">
+    <div class="lbl"><span class="k">bus tape</span> · every tick is one message crossing the kernel<span id="paused-flag" style="color:var(--warn);display:none"> · PAUSED</span></div>
+    <canvas id="tape"></canvas>
+    <div class="tape-legend">
+      <span><i style="background:var(--signal)"></i>heartbeat</span>
+      <span><i style="background:var(--pulse)"></i>app message</span>
+      <span><i style="background:var(--warn)"></i>supervisor</span>
+      <span><i style="background:var(--dead)"></i>denied / fault</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT COLUMN -->
+    <div class="col">
+      <section class="card">
+        <h2>services <span class="hint">isolated processes — each can die and be reborn alone</span></h2>
+        <div class="svc-grid" id="svc-grid"></div>
+      </section>
+
+      <section class="card">
+        <h2>event log</h2>
+        <div class="log-wrap">
+          <div id="log" aria-live="polite"></div>
+          <div class="spark-wrap">
+            <canvas id="spark"></canvas>
+            <div class="sv"><b id="sv-temp">—</b>telemetry °</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: controls -->
+    <div class="col">
+      <section class="card">
+        <h2>control room <span class="hint">provoke it</span></h2>
+        <div class="ctl">
+          <div class="group">
+            <div class="glabel"><span class="tag">runtime</span> — freeze / resume the whole system</div>
+            <div class="line">
+              <button id="btn-power" class="on">Stop</button>
+              <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">pauses every service, the supervisor, and the tape</span>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="group">
+            <div class="glabel"><span class="tag">offload</span> — run heavy work off the main thread</div>
+            <div class="line">
+              <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">count primes ≤</span>
+              <input type="number" id="n-input" value="150000" min="1000" max="400000" step="10000" />
+              <button id="btn-run">Run</button>
+            </div>
+            <div class="result-chip" id="compute-result">no job run yet — clock keeps ticking while it computes</div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="group">
+            <div class="glabel"><span class="tag">supervision</span> — the reincarnation server</div>
+            <div class="line">
+              <button id="btn-supervisor" class="on">Reincarnation: ON</button>
+              <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">turn off, then crash a service</span>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="group">
+            <div class="glabel"><span class="tag">least privilege</span> — capability policy</div>
+            <div class="line">
+              <button id="btn-policy" class="on">Policy: STRICT</button>
+              <button id="btn-violate" class="warn">Provoke violation</button>
+            </div>
+            <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);line-height:1.5">
+              telemetry tries to publish a control message — the kernel is the trust boundary that decides.
+            </span>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="group">
+            <div class="glabel"><span class="tag">hot swap</span> — upgrade with no reboot</div>
+            <div class="line">
+              <button id="btn-upgrade">Upgrade compute → v2</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>concept map <span class="hint">control → QNX idea</span></h2>
+        <div class="concepts">
+          <div class="concept"><span class="q">message passing</span><b>Bus tape.</b> Components never call each other — they publish; the kernel routes.</div>
+          <div class="concept"><span class="q">fault isolation</span><b>Hang / Crash.</b> One service dies without taking the page down.</div>
+          <div class="concept"><span class="q">supervision</span><b>Reincarnation.</b> Missed heartbeats → terminate and respawn.</div>
+          <div class="concept"><span class="q">least privilege</span><b>Policy.</b> Same routing mechanism, swappable permission rules.</div>
+          <div class="concept"><span class="q">location transparency</span><b>Move.</b> Worker or main-thread — callers can't tell.</div>
+          <div class="concept"><span class="q">hot swap</span><b>Upgrade.</b> Replace a running service in place, no reload.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer>a teaching model — services are Web Workers when the sandbox allows, else simulated on the main thread</footer>
+</div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
