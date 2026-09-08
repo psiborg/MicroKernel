@@ -33,14 +33,20 @@ export const CONFIG = {
     nDefault: 150000
   },
 
-  /* wasm SHA-256 miner (Rust → wasm; fetched at runtime) */
+  /* wasm miner module location (Rust → wasm; fetched at runtime) */
   wasm: {
     file: "./wasm/miner.wasm", // relative to index.html; resolved to absolute in boot()
-    url: "",                    // filled at boot with new URL(file, document.baseURI).href
+    url: ""                     // filled at boot with new URL(file, document.baseURI).href
+  },
+
+  /* shared SHA-256 mining parameters — used by BOTH miners so a race at the same
+     difficulty+salt searches the identical space and converges on the same nonce */
+  mine: {
     minBits: 8,
-    maxBits: 28,
-    defaultBits: 20,            // ~1M expected hashes → sub-second at a few MH/s
-    chunk: 400000              // hashes per cooperative slice (~yield so heartbeats flow)
+    maxBits: 26,
+    defaultBits: 20,          // ~1M expected hashes → sub-second at a few MH/s
+    wasmChunk: 400000,        // hashes per cooperative slice (wasm) before yielding
+    jsChunk: 120000           // smaller slice for the slower pure-JS miner
   },
 
   /* capability policy — topic prefixes each source may publish.
@@ -50,6 +56,7 @@ export const CONFIG = {
     telemetry:   ["telemetry/", "sys/heartbeat"],
     compute:     ["compute/", "sys/heartbeat"],
     wasmcompute: ["wasm/", "sys/heartbeat"],
+    jsminer:     ["js/", "sys/heartbeat"],
     operator:    [""]        // the operator/UI is privileged
   },
   defaultPolicy: "strict", // "strict" | "permissive"

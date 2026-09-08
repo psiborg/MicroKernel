@@ -95,13 +95,17 @@
           <div class="divider"></div>
 
           <div class="group">
-            <div class="glabel"><span class="tag">wasm mine</span> — SHA-256 proof-of-work (Rust → WebAssembly)</div>
+            <div class="glabel"><span class="tag">sha-256 race</span> — pure JS vs Rust → WebAssembly, same nonce, same tape</div>
             <div class="line">
               <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">difficulty (leading 0 bits)</span>
-              <input type="number" id="bits-input" value="20" min="8" max="28" step="1" />
-              <button id="btn-mine">Mine</button>
+              <input type="number" id="bits-input" value="20" min="8" max="26" step="1" />
+              <button id="btn-race">Race</button>
+              <button id="btn-mine">wasm only</button>
+              <button id="btn-mine-js">JS only</button>
             </div>
-            <div class="result-chip" id="wasm-result">no block mined yet — hashes run in a real .wasm module</div>
+            <div class="result-chip" id="wasm-result">wasm: idle — hashes run in a real .wasm module</div>
+            <div class="result-chip" id="js-result">js: idle — same algorithm, pure JavaScript</div>
+            <div class="result-chip" id="race-status">no race yet — Race starts both miners on the same nonce</div>
           </div>
 
           <div class="divider"></div>

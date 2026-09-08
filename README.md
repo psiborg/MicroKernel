@@ -125,11 +125,13 @@ rough order:
 4. **Run** with N up to 400,000. The prime count runs inside the compute worker
    while the clock keeps ticking — the main thread never blocks. In simulated
    mode you'll feel the clock stutter, which is *why* real isolation matters.
-5. **Mine** at a difficulty (leading zero bits). `wasmcompute` runs SHA-256
-   proof-of-work in a real `.wasm` module, hashing in cooperative chunks so it
-   posts a **live hashrate** while the clock keeps ticking and its own heartbeats
-   keep flowing. Raise the bits to make it work harder; the winning nonce and its
-   hash appear when found. This is the JS-vs-native contrast made literal — see
+5. **Race** at a difficulty (leading zero bits). Both miners — `wasmcompute`
+   (Rust→wasm) and `jsminer` (pure JS) — hash the **same** SHA-256 proof-of-work
+   from the **same** salt, so they converge on the **same winning nonce**; the
+   verdict line reports who got there first and the hashrate ratio. Each runs in
+   its own Worker, so it's a genuine parallel race, and both post a **live
+   hashrate** while the clock keeps ticking. (`wasm only` / `JS only` run them
+   solo.) The result may surprise you — see
    [The WebAssembly service](#the-webassembly-service).
 6. **Upgrade compute → v2**. The service's code is swapped in place (trial
    division → sieve), the version badge flips, and no page reload happens. Run a
@@ -189,7 +191,7 @@ actually does. Its whole surface:
 
 ### Services
 
-Four isolated "drivers":
+Five isolated "drivers":
 
 - **clock** — emits `clock/tick` once a second. Pure liveness.
 - **telemetry** — emits `telemetry/reading` (~800 ms) that feeds the sparkline.
@@ -197,7 +199,9 @@ Four isolated "drivers":
   `compute/result`. Ships in two versions for the hot-swap demo.
 - **wasmcompute** — on `wasm/run {bits}` mines SHA-256 proof-of-work in a real
   `.wasm` module (fetched at runtime), replying with `wasm/progress` (live
-  hashrate) and `wasm/result` (winning nonce + hash). See
+  hashrate) and `wasm/result` (winning nonce + hash).
+- **jsminer** — the *identical* SHA-256 PoW in pure JavaScript, on `js/run`. It
+  exists to race `wasmcompute` on the same tape; see
   [The WebAssembly service](#the-webassembly-service).
 
 Every service also emits `sys/heartbeat` (interval from `CONFIG.service`). Stop
@@ -306,8 +310,8 @@ from a service.
 | `supervisor.watchdogMs` | 2600 ms | fall back to simulated mode if workers never signal |
 | `compute.nMin / nMax / nDefault` | 1000 / 400000 / 150000 | prime-count bounds and default |
 | `wasm.file` | `./wasm/miner.wasm` | miner module path (resolved to absolute in boot) |
-| `wasm.defaultBits / minBits / maxBits` | 20 / 8 / 28 | mining difficulty (leading zero bits) |
-| `wasm.chunk` | 400000 | hashes per cooperative slice before yielding |
+| `mine.defaultBits / minBits / maxBits` | 20 / 8 / 26 | shared mining difficulty (leading zero bits) |
+| `mine.wasmChunk / jsChunk` | 400000 / 120000 | hashes per cooperative slice (wasm / JS) |
 | `capabilities` | (per service) | topic prefixes each source may publish |
 | `defaultPolicy` | `"strict"` | starting policy mode |
 | `tape.pxPerMs` | 0.055 | bus-tape scroll speed |
@@ -335,11 +339,14 @@ components.
 | `telemetry/reading` | telemetry | operator | `{temp, load}` for the sparkline |
 | `compute/run` | operator | compute | `{n}` request to count primes |
 | `compute/result` | compute | operator | `{n, count, ms, ver}` reply |
-| `wasm/run` | operator | wasmcompute | `{bits}` request to mine at a difficulty |
+| `wasm/run` | operator | wasmcompute | `{bits, salt?}` request to mine at a difficulty |
 | `wasm/progress` | wasmcompute | operator | `{hashes, rate, bits}` live hashrate |
 | `wasm/result` | wasmcompute | operator | `{nonce, hashHex, bits, salt, hashes, ms, rate}` |
 | `wasm/ready` | wasmcompute | operator | module instantiated |
 | `wasm/error` | wasmcompute | operator | `{msg}` module fetch/instantiate failed |
+| `js/run` | operator | jsminer | `{bits, salt?}` mine the identical PoW in JS |
+| `js/progress` | jsminer | operator | `{hashes, rate, bits}` live hashrate |
+| `js/result` | jsminer | operator | `{nonce, hashHex, bits, salt, hashes, ms, rate}` |
 | `sys/heartbeat` | all services | *(kernel → supervisor)* | liveness; never fanned out |
 | `sys/stopbeat` | operator → service | service | soft crash (hang) |
 | `sys/crash` | operator → service | service | hard crash (`die()`) |
@@ -399,6 +406,29 @@ the Rust wasm target. Both emit the identical ABI (`mine`, `set_salt`,
 `hash_nonce`, `digest_ptr`, exported `memory`), so a Rust rebuild is a drop-in
 replacement. `build.sh` prefers Rust and falls back to the clang twin. See
 `wasm/README.md` for the ABI table.
+
+### Racing it against pure JS
+
+`jsminer` implements the **same** SHA-256 PoW in plain JavaScript so you can race
+the two. The race is deliberately apples-to-apples: both hash the identical
+message (`salt ‖ nonce`) against the identical leading-zero-bits target, so at
+the same difficulty **and the same salt** they search the same space and land on
+the **same winning nonce**. **Race** picks one random salt and starts both;
+because each service runs in its own Worker, they run in parallel on separate
+cores, and the operator declares a winner once both finish (`js only` / `wasm
+only` run them solo). Both start from nonce 0 and count up, so the slower miner
+reaches the identical nonce later — the wall-clock gap *is* the speed difference.
+
+**The honest result: it's close.** On V8 the two are usually within ~10% of each
+other, and JS sometimes wins. That's not a rigged demo — it's the real lesson.
+A modern JIT compiles a hot, monomorphic integer loop like SHA-256 to essentially
+native code, so a straightforward scalar wasm build has little headroom to beat
+it. WebAssembly's decisive advantages show up elsewhere: **SIMD** (a vectorised
+hash or a `v128` inner loop pulls far ahead), **threads** (`SharedArrayBuffer` +
+multiple mining workers), **predictable performance** (no warmup, no GC pauses,
+no deopts — steadier under load), and shipping code from **non-JS languages**.
+For a plain scalar loop, "rewrite it in wasm" is not automatically a win — and
+the tape lets you see that for yourself rather than take it on faith.
 
 ---
 
@@ -502,7 +532,7 @@ file:
 2. **`ports.js`** — `workers.ok` probe/holder, `makeWorkerPort`, `makeLocalPort`
    (both implement the pause gate).
 3. **`services.js`** — `clockService`, `telemetryService`, `computeServiceV1/V2`,
-   `wasmComputeService` (read timings from `api.cfg`; **no scope capture**).
+   `wasmComputeService`, `jsMinerService` (read timings from `api.cfg`; **no scope capture**).
 4. **`kernel.js`** — `Kernel`: routing + `allow` policy (reads
    `CONFIG.capabilities`).
 5. **`supervisor.js`** — `Supervisor`: `define` / `spawn` / `replace` / `beat` /
@@ -557,10 +587,10 @@ The app is a minimal but real Progressive Web App.
   next time (kept alive with `event.waitUntil`). A change therefore appears on the
   **second** load after it ships — no cache-version bump required for routine
   edits. (Precaching the `.wasm` is what lets mining work offline.)
-- **Cache versioning** — the `CACHE` constant (`ukernel-v7`) names the cache; the
+- **Cache versioning** — the `CACHE` constant (`ukernel-v8`) names the cache; the
   `activate` handler deletes any other cache. Bump it only when you need to force
   an immediate refresh of the precached shell, or when the precache list itself
-  changes (the last bump added `wasm/miner.wasm` to the precache).
+  changes.
 - **Offline** — after the first successful load the app runs fully offline;
   navigations fall back to the cached `index.html`.
 - **Testing gotcha** — service workers keep controlling the page until the new one
@@ -597,7 +627,7 @@ learning.
 | Mechanism vs. policy | Policy toggle | `Kernel.allow` vs. `Kernel.ingress` |
 | Location transparency | Move | `makeWorkerPort` / `makeLocalPort` |
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
-| WebAssembly offload | Mine | `wasmComputeService`, `wasm/miner.wasm` |
+| WebAssembly vs JS | Race / wasm only / JS only | `wasmComputeService`, `jsMinerService` |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---

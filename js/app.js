@@ -21,7 +21,7 @@
 
 import { CONFIG as CFG } from "./config.js";
 import { workers } from "./ports.js";
-import { clockService, telemetryService, computeServiceV1, computeServiceV2, wasmComputeService } from "./services.js";
+import { clockService, telemetryService, computeServiceV1, computeServiceV2, wasmComputeService, jsMinerService } from "./services.js";
 import { Kernel } from "./kernel.js";
 import { Supervisor } from "./supervisor.js";
 import { Log, UI } from "./instruments.js";
@@ -41,19 +41,21 @@ function boot(){
   // seed wasm difficulty input + resolve the .wasm URL to absolute (workers have
   // no base URL, so this must be resolved against the document before injection)
   var bIn = document.getElementById("bits-input");
-  bIn.min = CFG.wasm.minBits; bIn.max = CFG.wasm.maxBits; bIn.value = CFG.wasm.defaultBits;
+  bIn.min = CFG.mine.minBits; bIn.max = CFG.mine.maxBits; bIn.value = CFG.mine.defaultBits;
   CFG.wasm.url = new URL(CFG.wasm.file, document.baseURI).href;
 
   // wiring: operator subscriptions + service definitions (composition happens here)
   Kernel.subscribe("operator", ["clock/tick","telemetry/reading","compute/result",
-                                 "wasm/ready","wasm/error","wasm/progress","wasm/result","sys/control"]);
-  Supervisor.define("clock",       {fn:clockService,     backend:"worker", subs:[], version:"v1"});
-  Supervisor.define("telemetry",   {fn:telemetryService, backend:"worker", subs:[], version:"v1"});
-  Supervisor.define("compute",     {fn:computeServiceV1, backend:"worker", subs:["compute/run"], version:"v1"});
+                                 "wasm/ready","wasm/error","wasm/progress","wasm/result",
+                                 "js/progress","js/result","sys/control"]);
+  Supervisor.define("clock",       {fn:clockService,       backend:"worker", subs:[], version:"v1"});
+  Supervisor.define("telemetry",   {fn:telemetryService,   backend:"worker", subs:[], version:"v1"});
+  Supervisor.define("compute",     {fn:computeServiceV1,   backend:"worker", subs:["compute/run"], version:"v1"});
   Supervisor.define("wasmcompute", {fn:wasmComputeService, backend:"worker", subs:["wasm/run","wasm/stop"], version:"v1"});
+  Supervisor.define("jsminer",     {fn:jsMinerService,     backend:"worker", subs:["js/run","js/stop"], version:"v1"});
 
   setModeBadge();
-  ["clock","telemetry","compute","wasmcompute"].forEach(function(n){ Supervisor.spawn(n); });
+  ["clock","telemetry","compute","wasmcompute","jsminer"].forEach(function(n){ Supervisor.spawn(n); });
   UI.renderCards();
 
   Log.add("sig", workers.ok
@@ -71,7 +73,7 @@ function boot(){
       if(Kernel.routed === 0){
         workers.ok = false; setModeBadge();
         Log.add("sup", "no signal from workers — falling back to simulated main-thread services");
-        ["clock","telemetry","compute","wasmcompute"].forEach(function(n){
+        ["clock","telemetry","compute","wasmcompute","jsminer"].forEach(function(n){
           var old = Kernel.services[n]; if(old&&old.port) old.port.terminate();
           Supervisor.specs[n].backend = "local"; Supervisor.spawn(n);
         });
@@ -84,6 +86,11 @@ function boot(){
 }
 
 /* ---------- controls ---------- */
+
+function readBits(){
+  var raw = parseInt(document.getElementById("bits-input").value,10) || CFG.mine.defaultBits;
+  return Math.max(CFG.mine.minBits, Math.min(CFG.mine.maxBits, raw));
+}
 
 function wireControls(){
   document.getElementById("btn-power").addEventListener("click", function(){ Runtime.toggle(); });
@@ -114,10 +121,25 @@ function wireControls(){
   });
 
   document.getElementById("btn-mine").addEventListener("click", function(){
-    var raw = parseInt(document.getElementById("bits-input").value,10) || CFG.wasm.defaultBits;
-    var bits = Math.max(CFG.wasm.minBits, Math.min(CFG.wasm.maxBits, raw));
-    document.getElementById("wasm-result").textContent = "mining… (SHA-256 in WebAssembly)";
+    var bits = readBits();
+    document.getElementById("wasm-result").textContent = "wasm: mining…";
     Kernel.publish("operator", "wasm/run", {bits:bits});
+  });
+
+  document.getElementById("btn-mine-js").addEventListener("click", function(){
+    var bits = readBits();
+    document.getElementById("js-result").textContent = "js: mining…";
+    Kernel.publish("operator", "js/run", {bits:bits});
+  });
+
+  document.getElementById("btn-race").addEventListener("click", function(){
+    var bits = readBits();
+    var salt = (Math.random()*0xFFFFFFFF) >>> 0;   // ONE salt → both search the same space
+    document.getElementById("wasm-result").textContent = "wasm: mining…";
+    document.getElementById("js-result").textContent = "js: mining…";
+    document.getElementById("race-status").textContent = "racing at " + bits + " bits — same nonce, may the faster core win";
+    Kernel.publish("operator", "wasm/run", {bits:bits, salt:salt});
+    Kernel.publish("operator", "js/run",   {bits:bits, salt:salt});
   });
 
   document.getElementById("btn-supervisor").addEventListener("click", function(){

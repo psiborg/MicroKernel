@@ -134,25 +134,48 @@ export const UI = {
   },
   wasmProgress:function(d){
     document.getElementById("wasm-result").innerHTML =
-      "mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
+      "wasm: mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
       (d.rate/1e6).toFixed(2) + "</b> MH/s";
   },
   wasmResult:function(d){
     if(d.exhausted){
-      document.getElementById("wasm-result").innerHTML = "no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
+      document.getElementById("wasm-result").innerHTML = "wasm: no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
       return;
     }
     document.getElementById("wasm-result").innerHTML =
-      "nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
+      "wasm: nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
       d.hashes.toLocaleString() + " hashes · " + d.ms + "ms · <b>" + (d.rate/1e6).toFixed(2) + "</b> MH/s";
   },
   wasmError:function(msg){
-    document.getElementById("wasm-result").textContent = "wasm unavailable — " + msg;
+    document.getElementById("wasm-result").textContent = "wasm: unavailable — " + msg;
+  },
+  jsProgress:function(d){
+    document.getElementById("js-result").innerHTML =
+      "js: mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
+      (d.rate/1e6).toFixed(2) + "</b> MH/s";
+  },
+  jsResult:function(d){
+    if(d.exhausted){
+      document.getElementById("js-result").innerHTML = "js: no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
+      return;
+    }
+    document.getElementById("js-result").innerHTML =
+      "js: nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
+      d.hashes.toLocaleString() + " hashes · " + d.ms + "ms · <b>" + (d.rate/1e6).toFixed(2) + "</b> MH/s";
+  },
+  raceStatus:function(r){
+    var el = document.getElementById("race-status");
+    el.classList.remove("win-wasm","win-js");
+    el.classList.add(r.winner === "wasm" ? "win-wasm" : "win-js");
+    el.innerHTML =
+      "▸ <b>" + (r.winner === "wasm" ? "wasm" : "JS") + " wins</b> at nonce " + r.nonce.toLocaleString() +
+      " — wasm <b>" + (r.wasmRate/1e6).toFixed(2) + "</b> MH/s (" + r.wasmMs + "ms) vs " +
+      "JS <b>" + (r.jsRate/1e6).toFixed(2) + "</b> MH/s (" + r.jsMs + "ms) · <b>" + r.ratio.toFixed(2) + "×</b>";
   },
   renderCards:function(){
     var grid = document.getElementById("svc-grid");
     grid.innerHTML = "";
-    ["clock","telemetry","compute","wasmcompute"].forEach(function(name){
+    ["clock","telemetry","compute","wasmcompute","jsminer"].forEach(function(name){
       var s = Supervisor.state[name], spec = Supervisor.specs[name], rec = Kernel.services[name];
       var host = rec ? rec.host : (spec.backend==="worker"&&workers.ok?"worker":"local");
       var el = document.createElement("div"); el.className="svc";
