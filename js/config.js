@@ -33,13 +33,24 @@ export const CONFIG = {
     nDefault: 150000
   },
 
+  /* wasm SHA-256 miner (Rust → wasm; fetched at runtime) */
+  wasm: {
+    file: "./wasm/miner.wasm", // relative to index.html; resolved to absolute in boot()
+    url: "",                    // filled at boot with new URL(file, document.baseURI).href
+    minBits: 8,
+    maxBits: 28,
+    defaultBits: 20,            // ~1M expected hashes → sub-second at a few MH/s
+    chunk: 400000              // hashes per cooperative slice (~yield so heartbeats flow)
+  },
+
   /* capability policy — topic prefixes each source may publish.
      This is POLICY (data); the routing MECHANISM in app.js never changes. */
   capabilities: {
-    clock:     ["clock/", "sys/heartbeat"],
-    telemetry: ["telemetry/", "sys/heartbeat"],
-    compute:   ["compute/", "sys/heartbeat"],
-    operator:  [""]        // the operator/UI is privileged
+    clock:       ["clock/", "sys/heartbeat"],
+    telemetry:   ["telemetry/", "sys/heartbeat"],
+    compute:     ["compute/", "sys/heartbeat"],
+    wasmcompute: ["wasm/", "sys/heartbeat"],
+    operator:    [""]        // the operator/UI is privileged
   },
   defaultPolicy: "strict", // "strict" | "permissive"
 

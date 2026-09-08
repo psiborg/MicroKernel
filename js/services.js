@@ -69,3 +69,79 @@ export function computeServiceV2(api){
   });
   api.interval(function(){ if(beating) api.post("sys/heartbeat", {t:api.now()}); }, C.heartbeatMs);
 }
+
+/* ----------------------------------------------------------------------------
+   wasmcompute — SHA-256 proof-of-work miner backed by a Rust→wasm module.
+
+   Fetches api.cfg.wasm.url (absolute, resolved in boot), instantiates it with an
+   EMPTY import object (the module is freestanding — no JS imports), then on
+   wasm/run mines in cooperative chunks of api.cfg.wasm.chunk hashes, yielding
+   between chunks with setTimeout(0) so heartbeats keep flowing (a busy Worker
+   can't heartbeat mid-chunk — hence the yield). Reports wasm/progress (live
+   hashrate) and wasm/result (winning nonce + hash). Still just an `api` consumer.
+---------------------------------------------------------------------------- */
+export function wasmComputeService(api){
+  var C = api.cfg;
+  var beating = true;
+  var ex = null;        // wasm exports once instantiated
+  var loadErr = null;
+  var job = null;       // active mining job, or null
+
+  fetch(C.wasm.url)
+    .then(function(r){ if(!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
+    .then(function(buf){ return WebAssembly.instantiate(buf, {}); })
+    .then(function(res){ ex = res.instance.exports; api.post("wasm/ready", {bytes: 0}); })
+    .catch(function(e){ loadErr = String(e && e.message || e); api.post("wasm/error", {msg: loadErr}); });
+
+  function digestHex(){
+    var p = ex.digest_ptr();
+    var b = new Uint8Array(ex.memory.buffer, p, 32), s = "";
+    for(var i=0;i<32;i++){ var h = b[i].toString(16); s += (h.length<2?"0":"") + h; }
+    return s;
+  }
+
+  function step(){
+    if(!job) return;
+    if(!ex){ setTimeout(step, 60); return; }        // wasm still loading — wait
+    var chunkStart = job.cursor >>> 0;
+    var t0 = api.now();
+    var found = ex.mine(job.bits, chunkStart, C.wasm.chunk); // i64 → BigInt in workers
+    var dt = api.now() - t0;
+    var f = (typeof found === "bigint") ? Number(found) : found;
+    if(f >= 0){
+      job.hashes += (f - chunkStart + 1);           // actual hashes done this chunk
+      var totalMs = api.now() - job.started;
+      api.post("wasm/result", {
+        nonce: f, hashHex: digestHex(), bits: job.bits, salt: job.salt,
+        hashes: job.hashes, ms: totalMs, rate: (job.hashes/((totalMs||1)/1000))|0
+      });
+      job = null;
+      return;
+    }
+    job.hashes += C.wasm.chunk;
+    job.cursor = (chunkStart + C.wasm.chunk) >>> 0;
+    api.post("wasm/progress", { hashes: job.hashes, rate: (C.wasm.chunk/((dt||1)/1000))|0, bits: job.bits });
+    if(job.cursor <= (job.start >>> 0) && job.hashes > 0x100000000){ // wrapped the 32-bit space
+      api.post("wasm/result", { nonce: -1, exhausted: true, bits: job.bits, hashes: job.hashes, ms: api.now()-job.started });
+      job = null;
+      return;
+    }
+    setTimeout(step, 0);                             // yield: lets heartbeats fire
+  }
+
+  api.on(function(m){
+    if(m.topic === "sys/stopbeat") beating = false;
+    else if(m.topic === "sys/crash") api.die();
+    else if(m.topic === "wasm/run"){
+      if(loadErr){ api.post("wasm/error", {msg: loadErr}); return; }
+      var salt = (Math.random()*0xFFFFFFFF) >>> 0;   // fresh "block" each run
+      if(ex) ex.set_salt(salt);
+      var start = (m.data && m.data.start >>> 0) || 0;
+      job = { bits: (m.data.bits|0), cursor: start, start: start, salt: salt, hashes: 0, started: api.now() };
+      step();
+    }
+    else if(m.topic === "wasm/stop"){ job = null; }
+  });
+
+  api.interval(function(){ if(beating) api.post("sys/heartbeat", {t:api.now()}); }, C.service.heartbeatMs);
+}

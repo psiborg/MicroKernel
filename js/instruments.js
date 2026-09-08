@@ -132,10 +132,27 @@ export const UI = {
       "π(" + d.n.toLocaleString() + ") = <b>" + d.count.toLocaleString() + "</b> primes · " +
       d.ms + "ms · <b>" + d.ver + "</b>";
   },
+  wasmProgress:function(d){
+    document.getElementById("wasm-result").innerHTML =
+      "mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
+      (d.rate/1e6).toFixed(2) + "</b> MH/s";
+  },
+  wasmResult:function(d){
+    if(d.exhausted){
+      document.getElementById("wasm-result").innerHTML = "no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
+      return;
+    }
+    document.getElementById("wasm-result").innerHTML =
+      "nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
+      d.hashes.toLocaleString() + " hashes · " + d.ms + "ms · <b>" + (d.rate/1e6).toFixed(2) + "</b> MH/s";
+  },
+  wasmError:function(msg){
+    document.getElementById("wasm-result").textContent = "wasm unavailable — " + msg;
+  },
   renderCards:function(){
     var grid = document.getElementById("svc-grid");
     grid.innerHTML = "";
-    ["clock","telemetry","compute"].forEach(function(name){
+    ["clock","telemetry","compute","wasmcompute"].forEach(function(name){
       var s = Supervisor.state[name], spec = Supervisor.specs[name], rec = Kernel.services[name];
       var host = rec ? rec.host : (spec.backend==="worker"&&workers.ok?"worker":"local");
       var el = document.createElement("div"); el.className="svc";

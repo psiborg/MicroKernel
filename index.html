@@ -95,6 +95,18 @@
           <div class="divider"></div>
 
           <div class="group">
+            <div class="glabel"><span class="tag">wasm mine</span> — SHA-256 proof-of-work (Rust → WebAssembly)</div>
+            <div class="line">
+              <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">difficulty (leading 0 bits)</span>
+              <input type="number" id="bits-input" value="20" min="8" max="28" step="1" />
+              <button id="btn-mine">Mine</button>
+            </div>
+            <div class="result-chip" id="wasm-result">no block mined yet — hashes run in a real .wasm module</div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="group">
             <div class="glabel"><span class="tag">supervision</span> — the reincarnation server</div>
             <div class="line">
               <button id="btn-supervisor" class="on">Reincarnation: ON</button>

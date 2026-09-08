@@ -56,6 +56,10 @@ js/
   instruments.js      Tape, Spark, Log, UI
   runtime.js          Stop/Play + the pausable uptime clock
   app.js              composition root: imports, boot, controls, SW registration
+wasm/
+  miner.wasm          prebuilt SHA-256 miner (fetched at runtime, precached)
+  src/lib.rs          canonical Rust source · Cargo.toml · build.sh
+  miner.c             C twin used to prebuild the binary · README.md (ABI)
 ```
 
 There is no build step and nothing to install as a dependency — it's vanilla
@@ -121,12 +125,18 @@ rough order:
 4. **Run** with N up to 400,000. The prime count runs inside the compute worker
    while the clock keeps ticking — the main thread never blocks. In simulated
    mode you'll feel the clock stutter, which is *why* real isolation matters.
-5. **Upgrade compute → v2**. The service's code is swapped in place (trial
+5. **Mine** at a difficulty (leading zero bits). `wasmcompute` runs SHA-256
+   proof-of-work in a real `.wasm` module, hashing in cooperative chunks so it
+   posts a **live hashrate** while the clock keeps ticking and its own heartbeats
+   keep flowing. Raise the bits to make it work harder; the winning nonce and its
+   hash appear when found. This is the JS-vs-native contrast made literal — see
+   [The WebAssembly service](#the-webassembly-service).
+6. **Upgrade compute → v2**. The service's code is swapped in place (trial
    division → sieve), the version badge flips, and no page reload happens. Run a
    job before and after to compare timings.
-6. **Move → worker/local** on any card. Callers address the service by topic, so
+7. **Move → worker/local** on any card. Callers address the service by topic, so
    nothing else changes. That's location transparency.
-7. **Provoke violation**. Telemetry tries to publish a `sys/control` message.
+8. **Provoke violation**. Telemetry tries to publish a `sys/control` message.
    Under **Strict** policy the kernel denies it (red tick on the tape, a
    `DENIED` log line). Flip to **Permissive** and the identical message flows.
    Same mechanism, different policy.
@@ -179,12 +189,16 @@ actually does. Its whole surface:
 
 ### Services
 
-Three isolated "drivers":
+Four isolated "drivers":
 
 - **clock** — emits `clock/tick` once a second. Pure liveness.
 - **telemetry** — emits `telemetry/reading` (~800 ms) that feeds the sparkline.
 - **compute** — on `compute/run {n}` counts primes ≤ n and replies with
   `compute/result`. Ships in two versions for the hot-swap demo.
+- **wasmcompute** — on `wasm/run {bits}` mines SHA-256 proof-of-work in a real
+  `.wasm` module (fetched at runtime), replying with `wasm/progress` (live
+  hashrate) and `wasm/result` (winning nonce + hash). See
+  [The WebAssembly service](#the-webassembly-service).
 
 Every service also emits `sys/heartbeat` (interval from `CONFIG.service`). Stop
 the heartbeats and the supervisor concludes the service is gone.
@@ -291,6 +305,9 @@ from a service.
 | `supervisor.tickMs` | 450 ms | how often liveness is evaluated |
 | `supervisor.watchdogMs` | 2600 ms | fall back to simulated mode if workers never signal |
 | `compute.nMin / nMax / nDefault` | 1000 / 400000 / 150000 | prime-count bounds and default |
+| `wasm.file` | `./wasm/miner.wasm` | miner module path (resolved to absolute in boot) |
+| `wasm.defaultBits / minBits / maxBits` | 20 / 8 / 28 | mining difficulty (leading zero bits) |
+| `wasm.chunk` | 400000 | hashes per cooperative slice before yielding |
 | `capabilities` | (per service) | topic prefixes each source may publish |
 | `defaultPolicy` | `"strict"` | starting policy mode |
 | `tape.pxPerMs` | 0.055 | bus-tape scroll speed |
@@ -318,6 +335,11 @@ components.
 | `telemetry/reading` | telemetry | operator | `{temp, load}` for the sparkline |
 | `compute/run` | operator | compute | `{n}` request to count primes |
 | `compute/result` | compute | operator | `{n, count, ms, ver}` reply |
+| `wasm/run` | operator | wasmcompute | `{bits}` request to mine at a difficulty |
+| `wasm/progress` | wasmcompute | operator | `{hashes, rate, bits}` live hashrate |
+| `wasm/result` | wasmcompute | operator | `{nonce, hashHex, bits, salt, hashes, ms, rate}` |
+| `wasm/ready` | wasmcompute | operator | module instantiated |
+| `wasm/error` | wasmcompute | operator | `{msg}` module fetch/instantiate failed |
 | `sys/heartbeat` | all services | *(kernel → supervisor)* | liveness; never fanned out |
 | `sys/stopbeat` | operator → service | service | soft crash (hang) |
 | `sys/crash` | operator → service | service | hard crash (`die()`) |
@@ -328,6 +350,55 @@ components.
 
 `sys/pause` and `sys/resume` are intercepted by the port, not delivered to the
 service function — freezing is transparent to the "driver."
+
+---
+
+## The WebAssembly service
+
+`wasmcompute` is the one service whose "driver" is native code. It demonstrates
+how a Wasm module drops into the exact same actor model as the JS services — it
+is still just an `api` consumer that subscribes to a topic and posts results.
+
+**A real module, fetched at runtime.** On spawn the service `fetch`es
+`wasm/miner.wasm` and calls `WebAssembly.instantiate(bytes, {})`. The import
+object is empty because the module is *freestanding* — `#![no_std]`, no
+allocator, no WASI, no JS callbacks. That is what lets the identical bytes run in
+a Web Worker *and* in the main-thread fallback with no glue. Because a Worker has
+no base URL, `boot()` resolves the path to an absolute URL
+(`new URL(CONFIG.wasm.file, document.baseURI).href`) *before* it is injected via
+`api.cfg` — a relative `fetch` inside the Worker would otherwise fail. The file
+is also in the service-worker precache, so mining works offline after first load.
+
+**What it computes.** SHA-256 proof-of-work: find a nonce whose
+`SHA-256(salt ‖ nonce)` has at least *N* leading zero bits. `N` is the difficulty
+knob. This is Hashcash/Bitcoin-style PoW in miniature (Bitcoin hashes an 80-byte
+header with double SHA-256; here it's an 8-byte message, single hash, to keep the
+module tiny). The winning hash is verifiable: the reported `hashHex` is exactly
+`SHA-256(salt ‖ nonce)`.
+
+**Cooperative execution — the heartbeat tension.** A tight native loop that runs
+to completion would block the Worker for seconds, and a Worker that can't post
+`sys/heartbeat` looks *dead* to the supervisor, which would then reincarnate a
+service that was working perfectly. So the miner runs in **chunks**: it hashes
+`CONFIG.wasm.chunk` nonces, posts progress, then yields with `setTimeout(0)`.
+Between chunks the heartbeat interval fires and the Worker stays visibly alive.
+This is the same "busy vs. wedged" problem the whole app is about, made concrete
+— keep each chunk well under `supervisor.deathMs`.
+
+**Language and build.** The module is written in **Rust** (`wasm/src/lib.rs`,
+canonical). Build it with your own toolchain:
+
+```
+rustup target add wasm32-unknown-unknown   # one time
+cd wasm && ./build.sh                       # → wasm/miner.wasm
+```
+
+The shipped `wasm/miner.wasm` was prebuilt from a byte-for-byte-equivalent **C
+twin** (`wasm/miner.c`) with clang, because the build sandbox couldn't install
+the Rust wasm target. Both emit the identical ABI (`mine`, `set_salt`,
+`hash_nonce`, `digest_ptr`, exported `memory`), so a Rust rebuild is a drop-in
+replacement. `build.sh` prefers Rust and falls back to the clang twin. See
+`wasm/README.md` for the ABI table.
 
 ---
 
@@ -430,8 +501,8 @@ file:
 1. **`config.js`** — `export const CONFIG`, pure data.
 2. **`ports.js`** — `workers.ok` probe/holder, `makeWorkerPort`, `makeLocalPort`
    (both implement the pause gate).
-3. **`services.js`** — `clockService`, `telemetryService`, `computeServiceV1/V2`
-   (read timings from `api.cfg`; **no scope capture**).
+3. **`services.js`** — `clockService`, `telemetryService`, `computeServiceV1/V2`,
+   `wasmComputeService` (read timings from `api.cfg`; **no scope capture**).
 4. **`kernel.js`** — `Kernel`: routing + `allow` policy (reads
    `CONFIG.capabilities`).
 5. **`supervisor.js`** — `Supervisor`: `define` / `spawn` / `replace` / `beat` /
@@ -478,18 +549,18 @@ The app is a minimal but real Progressive Web App.
 - **Icons** live in `icons/`. If you rename or move them, update `manifest.json`,
   the `<link>` tags in `index.html`, and the precache list in `sw.js` together.
 - **`sw.js` strategy** — on install it **precaches the app shell** (including
-  every module under `js/`), fetching each asset individually (not
-  `cache.addAll`, which is atomic) so a single missing file can't abort the whole
-  install; anything that fails is logged by name and skipped. At runtime it serves
-  the shell **stale-while-revalidate**: the cached copy is returned immediately
-  *and* a background fetch refreshes the cache for next time (kept alive with
-  `event.waitUntil`). A change therefore appears on the **second** load after it
-  ships — no cache-version bump required for routine edits.
-- **Cache versioning** — the `CACHE` constant (`ukernel-v5`) names the cache; the
+  every module under `js/` and `wasm/miner.wasm`), fetching each asset
+  individually (not `cache.addAll`, which is atomic) so a single missing file
+  can't abort the whole install; anything that fails is logged by name and
+  skipped. At runtime it serves the shell **stale-while-revalidate**: the cached
+  copy is returned immediately *and* a background fetch refreshes the cache for
+  next time (kept alive with `event.waitUntil`). A change therefore appears on the
+  **second** load after it ships — no cache-version bump required for routine
+  edits. (Precaching the `.wasm` is what lets mining work offline.)
+- **Cache versioning** — the `CACHE` constant (`ukernel-v7`) names the cache; the
   `activate` handler deletes any other cache. Bump it only when you need to force
   an immediate refresh of the precached shell, or when the precache list itself
-  changes (both true the last time it was bumped — the `js/` move changed every
-  script path).
+  changes (the last bump added `wasm/miner.wasm` to the precache).
 - **Offline** — after the first successful load the app runs fully offline;
   navigations fall back to the cached `index.html`.
 - **Testing gotcha** — service workers keep controlling the page until the new one
@@ -526,6 +597,7 @@ learning.
 | Mechanism vs. policy | Policy toggle | `Kernel.allow` vs. `Kernel.ingress` |
 | Location transparency | Move | `makeWorkerPort` / `makeLocalPort` |
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
+| WebAssembly offload | Mine | `wasmComputeService`, `wasm/miner.wasm` |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---

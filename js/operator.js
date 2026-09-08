@@ -16,6 +16,14 @@ export const Operator = {
       UI.computeResult(data);
       Log.add("pulse", "compute("+data.ver+"): " + data.count.toLocaleString() + " primes ≤ " + data.n.toLocaleString() + " in " + data.ms + "ms");
     }
+    else if(topic === "wasm/ready"){ Log.add("sig", "wasmcompute: miner.wasm instantiated"); }
+    else if(topic === "wasm/error"){ Log.add("bad", "wasmcompute: wasm unavailable — " + data.msg); UI.wasmError(data.msg); }
+    else if(topic === "wasm/progress"){ UI.wasmProgress(data); }
+    else if(topic === "wasm/result"){
+      UI.wasmResult(data);
+      if(data.exhausted) Log.add("bad", "wasmcompute: search space exhausted at difficulty " + data.bits);
+      else Log.add("pulse", "wasm mine: nonce " + data.nonce.toLocaleString() + " → " + data.hashHex.slice(0,16) + "… (" + data.bits + " bits, " + (data.rate/1e6).toFixed(2) + " MH/s)");
+    }
     else if(topic === "sys/control"){
       Log.add("sig", "operator received sys/control from " + src + " (policy is permissive)");
     }
