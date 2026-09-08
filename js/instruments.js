@@ -125,6 +125,48 @@ export const Log = (function(){
   return {add:add};
 })();
 
+/* FC — the JS-vs-WASM fight card. Tracks each corner's live hashrate, sizes the
+   two bars relative to the faster one, and renders the KO/decision verdict. */
+const FC = (function(){
+  var s = { js:{rate:0}, wasm:{rate:0} };
+  function el(id){ return document.getElementById(id); }
+  function bars(){
+    var mx = Math.max(s.js.rate, s.wasm.rate, 1);
+    el("fc-js-bar").style.width   = (100*s.js.rate/mx).toFixed(1) + "%";
+    el("fc-wasm-bar").style.width = (100*s.wasm.rate/mx).toFixed(1) + "%";
+    el("fc-js-rate").textContent   = (s.js.rate/1e6).toFixed(2);
+    el("fc-wasm-rate").textContent = (s.wasm.rate/1e6).toFixed(2);
+  }
+  function clearWin(){ el("fc-corner-js").classList.remove("winner"); el("fc-corner-wasm").classList.remove("winner"); }
+  function arm(bits){
+    s.js.rate = 0; s.wasm.rate = 0; clearWin();
+    el("fc-belt").textContent = bits + " bits on the line";
+    el("fc-verdict").textContent = "round in progress";
+    el("fc-mid").classList.add("live");
+    el("fc-js-sub").textContent = "hashing…"; el("fc-wasm-sub").textContent = "hashing…";
+    bars();
+  }
+  function solo(kind){
+    clearWin(); el("fc-mid").classList.remove("live");
+    el("fc-verdict").textContent = kind + " solo run";
+    el("fc-" + kind + "-sub").textContent = "hashing…";
+    s[kind].rate = 0; bars();
+  }
+  function update(kind, rate, hashes, sub){ s[kind].rate = rate; el("fc-" + kind + "-sub").textContent = sub; bars(); }
+  function done(kind, rate, sub){ s[kind].rate = rate; el("fc-" + kind + "-sub").textContent = sub; bars(); }
+  function verdict(r){
+    el("fc-mid").classList.remove("live");
+    clearWin();
+    el("fc-corner-" + r.winner).classList.add("winner");
+    var how = r.ratio >= 3 ? "by KO" : r.ratio >= 1.8 ? "by TKO"
+            : r.ratio >= 1.25 ? "unanimous decision" : "split decision";
+    el("fc-verdict").innerHTML = "<b>" + (r.winner === "wasm" ? "WASM" : "JS") + " wins</b> " + how +
+      " · " + r.ratio.toFixed(2) + "×";
+    el("fc-belt").textContent = "nonce " + r.nonce.toLocaleString();
+  }
+  return { arm:arm, solo:solo, update:update, done:done, verdict:verdict };
+})();
+
 export const UI = {
   metric:function(id,val){ document.getElementById(id).textContent = (typeof val==="number"?val.toLocaleString():val); },
   computeResult:function(d){
@@ -132,46 +174,25 @@ export const UI = {
       "π(" + d.n.toLocaleString() + ") = <b>" + d.count.toLocaleString() + "</b> primes · " +
       d.ms + "ms · <b>" + d.ver + "</b>";
   },
-  wasmProgress:function(d){
-    document.getElementById("wasm-result").innerHTML =
-      "wasm: mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
-      (d.rate/1e6).toFixed(2) + "</b> MH/s";
+  // ---- fight card ----
+  wasmMode:function(mode){
+    document.getElementById("fc-wasm-tech").textContent =
+      (mode === "simd") ? "Rust → wasm · SIMD ×4" : "Rust → wasm · scalar";
   },
+  wasmProgress:function(d){ FC.update("wasm", d.rate, d.hashes, d.bits + " bits · " + d.hashes.toLocaleString() + " H"); },
+  jsProgress:function(d){   FC.update("js",   d.rate, d.hashes, d.bits + " bits · " + d.hashes.toLocaleString() + " H"); },
   wasmResult:function(d){
-    if(d.exhausted){
-      document.getElementById("wasm-result").innerHTML = "wasm: no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
-      return;
-    }
-    document.getElementById("wasm-result").innerHTML =
-      "wasm: nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
-      d.hashes.toLocaleString() + " hashes · " + d.ms + "ms · <b>" + (d.rate/1e6).toFixed(2) + "</b> MH/s";
-  },
-  wasmError:function(msg){
-    document.getElementById("wasm-result").textContent = "wasm: unavailable — " + msg;
-  },
-  jsProgress:function(d){
-    document.getElementById("js-result").innerHTML =
-      "js: mining " + d.bits + " bits… <b>" + d.hashes.toLocaleString() + "</b> hashes · <b>" +
-      (d.rate/1e6).toFixed(2) + "</b> MH/s";
+    if(d.exhausted){ FC.done("wasm", 0, "no nonce ≤ 2³²"); return; }
+    FC.done("wasm", d.rate, "nonce " + d.nonce.toLocaleString() + " · " + d.ms + "ms · " + d.hashHex.slice(0,12) + "…");
   },
   jsResult:function(d){
-    if(d.exhausted){
-      document.getElementById("js-result").innerHTML = "js: no nonce found in 2³² space at <b>" + d.bits + "</b> bits";
-      return;
-    }
-    document.getElementById("js-result").innerHTML =
-      "js: nonce <b>" + d.nonce.toLocaleString() + "</b> · " + d.hashHex.slice(0,20) + "… · " +
-      d.hashes.toLocaleString() + " hashes · " + d.ms + "ms · <b>" + (d.rate/1e6).toFixed(2) + "</b> MH/s";
+    if(d.exhausted){ FC.done("js", 0, "no nonce ≤ 2³²"); return; }
+    FC.done("js", d.rate, "nonce " + d.nonce.toLocaleString() + " · " + d.ms + "ms · " + d.hashHex.slice(0,12) + "…");
   },
-  raceStatus:function(r){
-    var el = document.getElementById("race-status");
-    el.classList.remove("win-wasm","win-js");
-    el.classList.add(r.winner === "wasm" ? "win-wasm" : "win-js");
-    el.innerHTML =
-      "▸ <b>" + (r.winner === "wasm" ? "wasm" : "JS") + " wins</b> at nonce " + r.nonce.toLocaleString() +
-      " — wasm <b>" + (r.wasmRate/1e6).toFixed(2) + "</b> MH/s (" + r.wasmMs + "ms) vs " +
-      "JS <b>" + (r.jsRate/1e6).toFixed(2) + "</b> MH/s (" + r.jsMs + "ms) · <b>" + r.ratio.toFixed(2) + "×</b>";
-  },
+  wasmError:function(msg){ FC.done("wasm", 0, "unavailable — " + msg); },
+  raceArm:function(bits){ FC.arm(bits); },
+  soloArm:function(kind){ FC.solo(kind); },
+  raceStatus:function(r){ FC.verdict(r); },
   renderCards:function(){
     var grid = document.getElementById("svc-grid");
     grid.innerHTML = "";

@@ -9,7 +9,7 @@
    them. It only handles same-origin GETs for the static shell.
 ============================================================================ */
 
-const CACHE = "ukernel-v8";
+const CACHE = "ukernel-v9";
 
 const SHELL = [
   "./index.html",
@@ -24,6 +24,7 @@ const SHELL = [
   "./js/runtime.js",
   "./js/app.js",
   "./wasm/miner.wasm",
+  "./wasm/miner.simd.wasm",
   "./manifest.json",
   "./icons/favicon.png",
   "./icons/icon-192.png",

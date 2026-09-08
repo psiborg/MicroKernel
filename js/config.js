@@ -33,10 +33,13 @@ export const CONFIG = {
     nDefault: 150000
   },
 
-  /* wasm miner module location (Rust → wasm; fetched at runtime) */
+  /* wasm miner module locations (Rust → wasm; fetched at runtime).
+     The service prefers the SIMD module and falls back to scalar when the
+     browser lacks SIMD (validated via WebAssembly.validate on the bytes). */
   wasm: {
-    file: "./wasm/miner.wasm", // relative to index.html; resolved to absolute in boot()
-    url: ""                     // filled at boot with new URL(file, document.baseURI).href
+    file:     "./wasm/miner.wasm",       // scalar
+    simdFile: "./wasm/miner.simd.wasm",  // 4-way SIMD
+    url: "", simdUrl: ""                 // filled at boot (resolved to absolute)
   },
 
   /* shared SHA-256 mining parameters — used by BOTH miners so a race at the same

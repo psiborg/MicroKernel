@@ -42,7 +42,8 @@ function boot(){
   // no base URL, so this must be resolved against the document before injection)
   var bIn = document.getElementById("bits-input");
   bIn.min = CFG.mine.minBits; bIn.max = CFG.mine.maxBits; bIn.value = CFG.mine.defaultBits;
-  CFG.wasm.url = new URL(CFG.wasm.file, document.baseURI).href;
+  CFG.wasm.url     = new URL(CFG.wasm.file,     document.baseURI).href;
+  CFG.wasm.simdUrl = new URL(CFG.wasm.simdFile, document.baseURI).href;
 
   // wiring: operator subscriptions + service definitions (composition happens here)
   Kernel.subscribe("operator", ["clock/tick","telemetry/reading","compute/result",
@@ -122,22 +123,20 @@ function wireControls(){
 
   document.getElementById("btn-mine").addEventListener("click", function(){
     var bits = readBits();
-    document.getElementById("wasm-result").textContent = "wasm: mining…";
+    UI.soloArm("wasm");
     Kernel.publish("operator", "wasm/run", {bits:bits});
   });
 
   document.getElementById("btn-mine-js").addEventListener("click", function(){
     var bits = readBits();
-    document.getElementById("js-result").textContent = "js: mining…";
+    UI.soloArm("js");
     Kernel.publish("operator", "js/run", {bits:bits});
   });
 
   document.getElementById("btn-race").addEventListener("click", function(){
     var bits = readBits();
     var salt = (Math.random()*0xFFFFFFFF) >>> 0;   // ONE salt → both search the same space
-    document.getElementById("wasm-result").textContent = "wasm: mining…";
-    document.getElementById("js-result").textContent = "js: mining…";
-    document.getElementById("race-status").textContent = "racing at " + bits + " bits — same nonce, may the faster core win";
+    UI.raceArm(bits);
     Kernel.publish("operator", "wasm/run", {bits:bits, salt:salt});
     Kernel.publish("operator", "js/run",   {bits:bits, salt:salt});
   });

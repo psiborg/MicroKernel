@@ -87,10 +87,18 @@ export function wasmComputeService(api){
   var loadErr = null;
   var job = null;       // active mining job, or null
 
-  fetch(C.wasm.url)
+  // Prefer the SIMD module; fall back to scalar when the browser lacks SIMD.
+  // WebAssembly.validate on the actual bytes is an exact feature test.
+  fetch(C.wasm.simdUrl)
     .then(function(r){ if(!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
-    .then(function(buf){ return WebAssembly.instantiate(buf, {}); })
-    .then(function(res){ ex = res.instance.exports; api.post("wasm/ready", {bytes: 0}); })
+    .then(function(buf){
+      if(WebAssembly.validate(buf)) return { buf: buf, mode: "simd" };
+      return fetch(C.wasm.url).then(function(r){ return r.arrayBuffer(); })
+                              .then(function(b){ return { buf: b, mode: "scalar" }; });
+    })
+    .then(function(x){ return WebAssembly.instantiate(x.buf, {}).then(function(res){
+      ex = res.instance.exports; api.post("wasm/ready", { mode: x.mode });
+    }); })
     .catch(function(e){ loadErr = String(e && e.message || e); api.post("wasm/error", {msg: loadErr}); });
 
   function digestHex(){

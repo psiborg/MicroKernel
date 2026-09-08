@@ -95,17 +95,35 @@
           <div class="divider"></div>
 
           <div class="group">
-            <div class="glabel"><span class="tag">sha-256 race</span> — pure JS vs Rust → WebAssembly, same nonce, same tape</div>
+            <div class="glabel"><span class="tag">sha-256 throwdown</span> — pure JS vs Rust → WebAssembly, same nonce, same tape</div>
+            <div class="fightcard" id="fightcard">
+              <div class="fc-corner js" id="fc-corner-js">
+                <div class="fc-name">JAVASCRIPT</div>
+                <div class="fc-tech" id="fc-js-tech">scalar · V8 JIT</div>
+                <div class="fc-rate"><b id="fc-js-rate">0.00</b><span>MH/s</span></div>
+                <div class="fc-bar"><i id="fc-js-bar"></i></div>
+                <div class="fc-sub" id="fc-js-sub">idle</div>
+              </div>
+              <div class="fc-mid" id="fc-mid">
+                <div class="fc-vs">VS</div>
+                <div class="fc-belt" id="fc-belt">no bout yet</div>
+                <div class="fc-verdict" id="fc-verdict">press Fight</div>
+              </div>
+              <div class="fc-corner wasm" id="fc-corner-wasm">
+                <div class="fc-name">WEBASSEMBLY</div>
+                <div class="fc-tech" id="fc-wasm-tech">Rust → wasm</div>
+                <div class="fc-rate"><b id="fc-wasm-rate">0.00</b><span>MH/s</span></div>
+                <div class="fc-bar"><i id="fc-wasm-bar"></i></div>
+                <div class="fc-sub" id="fc-wasm-sub">idle</div>
+              </div>
+            </div>
             <div class="line">
               <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">difficulty (leading 0 bits)</span>
               <input type="number" id="bits-input" value="20" min="8" max="26" step="1" />
-              <button id="btn-race">Race</button>
-              <button id="btn-mine">wasm only</button>
-              <button id="btn-mine-js">JS only</button>
+              <button id="btn-race">Fight</button>
+              <button id="btn-mine">wasm solo</button>
+              <button id="btn-mine-js">JS solo</button>
             </div>
-            <div class="result-chip" id="wasm-result">wasm: idle — hashes run in a real .wasm module</div>
-            <div class="result-chip" id="js-result">js: idle — same algorithm, pure JavaScript</div>
-            <div class="result-chip" id="race-status">no race yet — Race starts both miners on the same nonce</div>
           </div>
 
           <div class="divider"></div>

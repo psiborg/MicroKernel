@@ -34,7 +34,7 @@ export const Operator = {
       UI.computeResult(data);
       Log.add("pulse", "compute("+data.ver+"): " + data.count.toLocaleString() + " primes ≤ " + data.n.toLocaleString() + " in " + data.ms + "ms");
     }
-    else if(topic === "wasm/ready"){ Log.add("sig", "wasmcompute: miner.wasm instantiated"); }
+    else if(topic === "wasm/ready"){ UI.wasmMode(data.mode); Log.add("sig", "wasmcompute: " + (data.mode === "simd" ? "SIMD ×4" : "scalar") + " miner instantiated"); }
     else if(topic === "wasm/error"){ Log.add("bad", "wasmcompute: wasm unavailable — " + data.msg); UI.wasmError(data.msg); }
     else if(topic === "wasm/progress"){ UI.wasmProgress(data); }
     else if(topic === "wasm/result"){

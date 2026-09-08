@@ -57,9 +57,11 @@ js/
   runtime.js          Stop/Play + the pausable uptime clock
   app.js              composition root: imports, boot, controls, SW registration
 wasm/
-  miner.wasm          prebuilt SHA-256 miner (fetched at runtime, precached)
-  src/lib.rs          canonical Rust source · Cargo.toml · build.sh
-  miner.c             C twin used to prebuild the binary · README.md (ABI)
+  miner.wasm          prebuilt scalar SHA-256 miner (fetched at runtime, precached)
+  miner.simd.wasm     prebuilt 4-way SIMD miner (preferred; scalar is the fallback)
+  src/lib.rs          canonical Rust source, scalar · Cargo.toml · build.sh
+  src/simd.rs         canonical Rust source, SIMD (build with +simd128)
+  miner.c             scalar C twin · miner_simd.c  SIMD C twin · README.md (ABI)
 ```
 
 There is no build step and nothing to install as a dependency — it's vanilla
@@ -125,14 +127,14 @@ rough order:
 4. **Run** with N up to 400,000. The prime count runs inside the compute worker
    while the clock keeps ticking — the main thread never blocks. In simulated
    mode you'll feel the clock stutter, which is *why* real isolation matters.
-5. **Race** at a difficulty (leading zero bits). Both miners — `wasmcompute`
-   (Rust→wasm) and `jsminer` (pure JS) — hash the **same** SHA-256 proof-of-work
-   from the **same** salt, so they converge on the **same winning nonce**; the
-   verdict line reports who got there first and the hashrate ratio. Each runs in
-   its own Worker, so it's a genuine parallel race, and both post a **live
-   hashrate** while the clock keeps ticking. (`wasm only` / `JS only` run them
-   solo.) The result may surprise you — see
-   [The WebAssembly service](#the-webassembly-service).
+5. **Fight** at a difficulty (leading zero bits). The fight card pits
+   `wasmcompute` (Rust→wasm, **SIMD ×4**) against `jsminer` (pure JS): both hash
+   the **same** SHA-256 PoW from the **same** salt, converge on the **same
+   nonce**, and show a **live hashrate** in each corner. Each runs in its own
+   Worker (a genuine parallel bout on separate cores); the verdict declares the
+   winner "by KO / TKO / decision" with the speed ratio. SIMD typically wins ~3–4×
+   — but `wasm solo` / `JS solo` and the scalar fallback show why that gap is all
+   about SIMD; see [The WebAssembly service](#the-webassembly-service).
 6. **Upgrade compute → v2**. The service's code is swapped in place (trial
    division → sieve), the version badge flips, and no page reload happens. Run a
    job before and after to compare timings.
@@ -199,7 +201,8 @@ Five isolated "drivers":
   `compute/result`. Ships in two versions for the hot-swap demo.
 - **wasmcompute** — on `wasm/run {bits}` mines SHA-256 proof-of-work in a real
   `.wasm` module (fetched at runtime), replying with `wasm/progress` (live
-  hashrate) and `wasm/result` (winning nonce + hash).
+  hashrate) and `wasm/result` (winning nonce + hash). Prefers a **4-way SIMD**
+  module and falls back to scalar when the browser lacks SIMD.
 - **jsminer** — the *identical* SHA-256 PoW in pure JavaScript, on `js/run`. It
   exists to race `wasmcompute` on the same tape; see
   [The WebAssembly service](#the-webassembly-service).
@@ -309,7 +312,7 @@ from a service.
 | `supervisor.tickMs` | 450 ms | how often liveness is evaluated |
 | `supervisor.watchdogMs` | 2600 ms | fall back to simulated mode if workers never signal |
 | `compute.nMin / nMax / nDefault` | 1000 / 400000 / 150000 | prime-count bounds and default |
-| `wasm.file` | `./wasm/miner.wasm` | miner module path (resolved to absolute in boot) |
+| `wasm.file / simdFile` | `./wasm/miner.wasm` / `.simd.wasm` | scalar / SIMD module paths (resolved to absolute in boot) |
 | `mine.defaultBits / minBits / maxBits` | 20 / 8 / 26 | shared mining difficulty (leading zero bits) |
 | `mine.wasmChunk / jsChunk` | 400000 / 120000 | hashes per cooperative slice (wasm / JS) |
 | `capabilities` | (per service) | topic prefixes each source may publish |
@@ -366,15 +369,18 @@ service function — freezing is transparent to the "driver."
 how a Wasm module drops into the exact same actor model as the JS services — it
 is still just an `api` consumer that subscribes to a topic and posts results.
 
-**A real module, fetched at runtime.** On spawn the service `fetch`es
-`wasm/miner.wasm` and calls `WebAssembly.instantiate(bytes, {})`. The import
-object is empty because the module is *freestanding* — `#![no_std]`, no
-allocator, no WASI, no JS callbacks. That is what lets the identical bytes run in
-a Web Worker *and* in the main-thread fallback with no glue. Because a Worker has
-no base URL, `boot()` resolves the path to an absolute URL
-(`new URL(CONFIG.wasm.file, document.baseURI).href`) *before* it is injected via
-`api.cfg` — a relative `fetch` inside the Worker would otherwise fail. The file
-is also in the service-worker precache, so mining works offline after first load.
+**A real module, fetched at runtime.** On spawn the service `fetch`es the SIMD
+module and calls `WebAssembly.validate(bytes)` on it — an exact feature test. If
+it validates, that module is used (`mode: "simd"`); otherwise the service fetches
+the scalar module instead (`mode: "scalar"`). Either way it then calls
+`WebAssembly.instantiate(bytes, {})`. The import object is empty because the
+module is *freestanding* — `#![no_std]`, no allocator, no WASI, no JS callbacks.
+That is what lets the identical bytes run in a Web Worker *and* in the main-thread
+fallback with no glue. Because a Worker has no base URL, `boot()` resolves both
+paths to absolute URLs (`new URL(CONFIG.wasm.file, document.baseURI).href`)
+*before* they are injected via `api.cfg` — a relative `fetch` inside the Worker
+would otherwise fail. Both files are in the service-worker precache, so mining
+works offline after first load.
 
 **What it computes.** SHA-256 proof-of-work: find a nonce whose
 `SHA-256(salt ‖ nonce)` has at least *N* leading zero bits. `N` is the difficulty
@@ -387,7 +393,7 @@ module tiny). The winning hash is verifiable: the reported `hashHex` is exactly
 to completion would block the Worker for seconds, and a Worker that can't post
 `sys/heartbeat` looks *dead* to the supervisor, which would then reincarnate a
 service that was working perfectly. So the miner runs in **chunks**: it hashes
-`CONFIG.wasm.chunk` nonces, posts progress, then yields with `setTimeout(0)`.
+`CONFIG.mine.wasmChunk` nonces, posts progress, then yields with `setTimeout(0)`.
 Between chunks the heartbeat interval fires and the Worker stays visibly alive.
 This is the same "busy vs. wedged" problem the whole app is about, made concrete
 — keep each chunk well under `supervisor.deathMs`.
@@ -407,28 +413,37 @@ the Rust wasm target. Both emit the identical ABI (`mine`, `set_salt`,
 replacement. `build.sh` prefers Rust and falls back to the clang twin. See
 `wasm/README.md` for the ABI table.
 
-### Racing it against pure JS
+### The fight card: JS vs WASM
 
 `jsminer` implements the **same** SHA-256 PoW in plain JavaScript so you can race
-the two. The race is deliberately apples-to-apples: both hash the identical
-message (`salt ‖ nonce`) against the identical leading-zero-bits target, so at
-the same difficulty **and the same salt** they search the same space and land on
-the **same winning nonce**. **Race** picks one random salt and starts both;
-because each service runs in its own Worker, they run in parallel on separate
-cores, and the operator declares a winner once both finish (`js only` / `wasm
-only` run them solo). Both start from nonce 0 and count up, so the slower miner
-reaches the identical nonce later — the wall-clock gap *is* the speed difference.
+it against the wasm module. The race is deliberately apples-to-apples: both hash
+the identical message (`salt ‖ nonce`) against the identical leading-zero-bits
+target, so at the same difficulty **and the same salt** they search the same
+space and land on the **same winning nonce**. **Fight** picks one random salt and
+starts both; each service runs in its own Worker, so it's a genuine parallel bout
+on separate cores. The fight card shows a live hashrate in each corner (JS in
+amber, WASM in teal), sizes the bars relative to the faster fighter, and declares
+a winner "by KO / TKO / decision" with the speed ratio once both land the nonce.
+(`wasm solo` / `JS solo` run one corner at a time.)
 
-**The honest result: it's close.** On V8 the two are usually within ~10% of each
-other, and JS sometimes wins. That's not a rigged demo — it's the real lesson.
-A modern JIT compiles a hot, monomorphic integer loop like SHA-256 to essentially
-native code, so a straightforward scalar wasm build has little headroom to beat
-it. WebAssembly's decisive advantages show up elsewhere: **SIMD** (a vectorised
-hash or a `v128` inner loop pulls far ahead), **threads** (`SharedArrayBuffer` +
-multiple mining workers), **predictable performance** (no warmup, no GC pauses,
-no deopts — steadier under load), and shipping code from **non-JS languages**.
-For a plain scalar loop, "rewrite it in wasm" is not automatically a win — and
-the tape lets you see that for yourself rather than take it on faith.
+**Two lessons, one tape.** Flip the wasm module between its scalar and SIMD builds
+(the service prefers SIMD; the scalar fallback is what you'd get on a browser
+without it) and the verdict changes completely:
+
+- **Scalar wasm ≈ JS.** They land within ~10% of each other, and JS sometimes
+  wins. A modern JIT compiles a hot, monomorphic integer loop like SHA-256 to
+  essentially native code, so a straightforward scalar wasm build has little
+  headroom. "Rewrite it in wasm" is *not* automatically a win.
+- **SIMD wasm wins ~3–4×.** `miner.simd.wasm` hashes **four nonces at once**, one
+  per `i32x4` lane (a single SHA-256 is a serial dependency chain, so the win is
+  data-parallelism *across* nonces, not a faster single hash). JS has no portable
+  SIMD, so this is a gap it structurally can't close.
+
+That's the honest takeaway: WebAssembly's decisive advantages are **SIMD**,
+**threads** (`SharedArrayBuffer` + multiple mining workers), **predictable
+performance** (no warmup, no GC pauses, no deopts), and shipping **non-JS
+languages** — not simply "it's compiled." The tape lets you see it rather than
+take it on faith.
 
 ---
 
@@ -627,7 +642,7 @@ learning.
 | Mechanism vs. policy | Policy toggle | `Kernel.allow` vs. `Kernel.ingress` |
 | Location transparency | Move | `makeWorkerPort` / `makeLocalPort` |
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
-| WebAssembly vs JS | Race / wasm only / JS only | `wasmComputeService`, `jsMinerService` |
+| WebAssembly vs JS (SIMD) | Fight / wasm solo / JS solo | `wasmComputeService` (SIMD), `jsMinerService` |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---
