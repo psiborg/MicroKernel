@@ -125,8 +125,8 @@ export const Log = (function(){
   return {add:add};
 })();
 
-/* FC — the JS-vs-WASM fight card. Tracks each corner's live hashrate, sizes the
-   two bars relative to the faster one, and renders the KO/decision verdict. */
+/* FC — the JS-vs-WASM head-to-head race. Tracks each side's live hashrate, sizes
+   the two bars relative to the faster one, and renders the winner + margin. */
 const FC = (function(){
   var s = { js:{rate:0}, wasm:{rate:0} };
   function el(id){ return document.getElementById(id); }
@@ -140,8 +140,8 @@ const FC = (function(){
   function clearWin(){ el("fc-corner-js").classList.remove("winner"); el("fc-corner-wasm").classList.remove("winner"); }
   function arm(bits){
     s.js.rate = 0; s.wasm.rate = 0; clearWin();
-    el("fc-belt").textContent = bits + " bits on the line";
-    el("fc-verdict").textContent = "round in progress";
+    el("fc-belt").textContent = bits + " bits";
+    el("fc-verdict").textContent = "racing…";
     el("fc-mid").classList.add("live");
     el("fc-js-sub").textContent = "hashing…"; el("fc-wasm-sub").textContent = "hashing…";
     bars();
@@ -158,8 +158,8 @@ const FC = (function(){
     el("fc-mid").classList.remove("live");
     clearWin();
     el("fc-corner-" + r.winner).classList.add("winner");
-    var how = r.ratio >= 3 ? "by KO" : r.ratio >= 1.8 ? "by TKO"
-            : r.ratio >= 1.25 ? "unanimous decision" : "split decision";
+    var how = r.ratio >= 3 ? "in a runaway" : r.ratio >= 1.8 ? "comfortably"
+            : r.ratio >= 1.25 ? "by a clear margin" : "in a photo finish";
     el("fc-verdict").innerHTML = "<b>" + (r.winner === "wasm" ? "WASM" : "JS") + " wins</b> " + how +
       " · " + r.ratio.toFixed(2) + "×";
     el("fc-belt").textContent = "nonce " + r.nonce.toLocaleString();
@@ -174,7 +174,7 @@ export const UI = {
       "π(" + d.n.toLocaleString() + ") = <b>" + d.count.toLocaleString() + "</b> primes · " +
       d.ms + "ms · <b>" + d.ver + "</b>";
   },
-  // ---- fight card ----
+  // ---- race panel (head-to-head) ----
   wasmMode:function(mode){
     document.getElementById("fc-wasm-tech").textContent =
       (mode === "simd") ? "Rust → wasm · SIMD ×4" : "Rust → wasm · scalar";

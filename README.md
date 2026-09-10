@@ -127,14 +127,15 @@ rough order:
 4. **Run** with N up to 400,000. The prime count runs inside the compute worker
    while the clock keeps ticking — the main thread never blocks. In simulated
    mode you'll feel the clock stutter, which is *why* real isolation matters.
-5. **Fight** at a difficulty (leading zero bits). The fight card pits
+5. **Race** at a difficulty (leading zero bits). The head-to-head panel pits
    `wasmcompute` (Rust→wasm, **SIMD ×4**) against `jsminer` (pure JS): both hash
    the **same** SHA-256 PoW from the **same** salt, converge on the **same
-   nonce**, and show a **live hashrate** in each corner. Each runs in its own
-   Worker (a genuine parallel bout on separate cores); the verdict declares the
-   winner "by KO / TKO / decision" with the speed ratio. SIMD typically wins ~3–4×
-   — but `wasm solo` / `JS solo` and the scalar fallback show why that gap is all
-   about SIMD; see [The WebAssembly service](#the-webassembly-service).
+   nonce**, and show a **live hashrate** on each side. Each runs in its own Worker
+   (a genuine parallel race on separate cores); the verdict names the winner and
+   the margin (from a photo finish up to a runaway) with the speed ratio. SIMD
+   typically wins ~3–4× — but `wasm solo` / `JS solo` and the scalar fallback show
+   why that gap is all about SIMD; see
+   [The WebAssembly service](#the-webassembly-service).
 6. **Upgrade compute → v2**. The service's code is swapped in place (trial
    division → sieve), the version badge flips, and no page reload happens. Run a
    job before and after to compare timings.
@@ -413,18 +414,19 @@ the Rust wasm target. Both emit the identical ABI (`mine`, `set_salt`,
 replacement. `build.sh` prefers Rust and falls back to the clang twin. See
 `wasm/README.md` for the ABI table.
 
-### The fight card: JS vs WASM
+### Head-to-head: JS vs WASM
 
 `jsminer` implements the **same** SHA-256 PoW in plain JavaScript so you can race
 it against the wasm module. The race is deliberately apples-to-apples: both hash
 the identical message (`salt ‖ nonce`) against the identical leading-zero-bits
 target, so at the same difficulty **and the same salt** they search the same
-space and land on the **same winning nonce**. **Fight** picks one random salt and
-starts both; each service runs in its own Worker, so it's a genuine parallel bout
-on separate cores. The fight card shows a live hashrate in each corner (JS in
-amber, WASM in teal), sizes the bars relative to the faster fighter, and declares
-a winner "by KO / TKO / decision" with the speed ratio once both land the nonce.
-(`wasm solo` / `JS solo` run one corner at a time.)
+space and land on the **same winning nonce**. **Race** picks one random salt and
+starts both; each service runs in its own Worker, so it's a genuine parallel race
+on separate cores. The panel shows a live hashrate on each side (JS in amber,
+WASM in teal), sizes the bars relative to the faster miner, and names the winner
+and the margin (photo finish → clear margin → comfortably → runaway) with the
+speed ratio once both land the nonce. (`wasm solo` / `JS solo` run one side at a
+time.)
 
 **Two lessons, one tape.** Flip the wasm module between its scalar and SIMD builds
 (the service prefers SIMD; the scalar fallback is what you'd get on a browser
@@ -642,7 +644,7 @@ learning.
 | Mechanism vs. policy | Policy toggle | `Kernel.allow` vs. `Kernel.ingress` |
 | Location transparency | Move | `makeWorkerPort` / `makeLocalPort` |
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
-| WebAssembly vs JS (SIMD) | Fight / wasm solo / JS solo | `wasmComputeService` (SIMD), `jsMinerService` |
+| WebAssembly vs JS (SIMD) | Race / wasm solo / JS solo | `wasmComputeService` (SIMD), `jsMinerService` |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---
