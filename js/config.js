@@ -46,7 +46,11 @@ export const CONFIG = {
      difficulty+salt searches the identical space and converges on the same nonce */
   mine: {
     minBits: 8,
-    maxBits: 26,
+    maxBits: 32,              // ceiling: the target checks the top `bits` of the
+                              // first hash word (needs bits<=32), and the nonce is
+                              // a u32 so 2^32 is the whole search space. Past ~28
+                              // the JS side takes minutes; near 32 a given salt may
+                              // have no solution at all (miners report "exhausted").
     defaultBits: 20,          // ~1M expected hashes → sub-second at a few MH/s
     wasmChunk: 400000,        // hashes per cooperative slice (wasm) before yielding
     jsChunk: 120000           // smaller slice for the slower pure-JS miner

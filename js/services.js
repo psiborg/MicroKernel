@@ -128,8 +128,8 @@ export function wasmComputeService(api){
     }
     job.hashes += C.mine.wasmChunk;
     job.cursor = (chunkStart + C.mine.wasmChunk) >>> 0;
-    api.post("wasm/progress", { hashes: job.hashes, rate: (C.wasm.chunk/((dt||1)/1000))|0, bits: job.bits });
-    if(job.cursor <= (job.start >>> 0) && job.hashes > 0x100000000){ // wrapped the 32-bit space
+    api.post("wasm/progress", { hashes: job.hashes, rate: (C.mine.wasmChunk/((dt||1)/1000))|0, bits: job.bits });
+    if(job.hashes >= 0x100000000){                    // searched the whole 2^32 nonce space
       api.post("wasm/result", { nonce: -1, exhausted: true, bits: job.bits, hashes: job.hashes, ms: api.now()-job.started });
       job = null;
       return;
@@ -235,7 +235,7 @@ export function jsMinerService(api){
     job.hashes += chunk;
     job.cursor = (start + chunk) >>> 0;
     api.post("js/progress", { hashes: job.hashes, rate: (chunk/((dt||1)/1000))|0, bits: job.bits });
-    if(job.cursor <= (job.start >>> 0) && job.hashes > 0x100000000){
+    if(job.hashes >= 0x100000000){                    // searched the whole 2^32 nonce space
       api.post("js/result", { nonce: -1, exhausted: true, bits: job.bits, hashes: job.hashes, ms: api.now()-job.started });
       job = null;
       return;

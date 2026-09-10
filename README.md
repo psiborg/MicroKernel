@@ -314,7 +314,7 @@ from a service.
 | `supervisor.watchdogMs` | 2600 ms | fall back to simulated mode if workers never signal |
 | `compute.nMin / nMax / nDefault` | 1000 / 400000 / 150000 | prime-count bounds and default |
 | `wasm.file / simdFile` | `./wasm/miner.wasm` / `.simd.wasm` | scalar / SIMD module paths (resolved to absolute in boot) |
-| `mine.defaultBits / minBits / maxBits` | 20 / 8 / 26 | shared mining difficulty (leading zero bits) |
+| `mine.defaultBits / minBits / maxBits` | 20 / 8 / 32 | shared difficulty (leading zero bits); 32 is the ceiling — single-word target check plus a u32 nonce space |
 | `mine.wasmChunk / jsChunk` | 400000 / 120000 | hashes per cooperative slice (wasm / JS) |
 | `capabilities` | (per service) | topic prefixes each source may publish |
 | `defaultPolicy` | `"strict"` | starting policy mode |
@@ -389,6 +389,14 @@ knob. This is Hashcash/Bitcoin-style PoW in miniature (Bitcoin hashes an 80-byte
 header with double SHA-256; here it's an 8-byte message, single hash, to keep the
 module tiny). The winning hash is verifiable: the reported `hashHex` is exactly
 `SHA-256(salt ‖ nonce)`.
+
+**Difficulty range (8–32).** Finding a nonce with *N* leading zero bits takes
+~2^*N* hashes on average. The target test inspects the top *N* bits of the first
+hash word, so *N* ≤ 32; and the nonce is a `u32`, so 2³² is the entire search
+space. That makes 32 the natural ceiling: at *N* = 32 the expected work equals the
+whole space, so a given salt has only ~63% odds of containing any solution — when
+none exists the miner searches all 2³² nonces and reports `exhausted`. Past ~28
+the pure-JS side takes minutes; 20 (the default) is sub-second.
 
 **Cooperative execution — the heartbeat tension.** A tight native loop that runs
 to completion would block the Worker for seconds, and a Worker that can't post
