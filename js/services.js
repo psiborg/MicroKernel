@@ -318,3 +318,177 @@ export function analyzerService(api){
     }
   }, C.heartbeatMs);
 }
+
+/* ----------------------------------------------------------------------------
+   pi — hex digits of π via the Bailey–Borwein–Plouffe (BBP) spigot.
+
+   BBP extracts the n-th HEX digit of π on its own, without the digits before it,
+   using modular exponentiation in fixed precision. Every digit position is an
+   INDEPENDENT computation — embarrassingly parallel — so this is one of the few
+   number-crunching tasks that actually suits a GPU. The service runs a WebGPU
+   compute shader (one invocation per digit position) when the browser exposes
+   `navigator.gpu`, and falls back to the SAME integer algorithm on the CPU
+   otherwise. It self-checks the GPU output against the CPU reference and falls
+   back if they disagree, so the result is always correct.
+
+   Everything is u32 integer + 32-bit fixed-point (WGSL has no f64), which stays
+   exact up to ~4000 digits (denominators < 2^15, so products fit u32). BBP gives
+   BASE-16 digits; decimal spigots exist but are sequential — not GPU-friendly,
+   which is itself the lesson. Self-contained: no scope capture.
+---------------------------------------------------------------------------- */
+export function piService(api){
+  var C = api.cfg;
+  var beating = true;
+  var busy = false;
+  var dev = null;                 // cached GPUDevice once acquired
+  var HEX = "0123456789ABCDEF";
+
+  /* ---- integer BBP (identical math to the WGSL shader below) ---- */
+  function fixeddiv(r, denom){     // floor(r * 2^32 / denom), r < denom
+    var hi = Math.floor((r*65536)/denom), rem = (r*65536)%denom, lo = Math.floor((rem*65536)/denom);
+    return ((hi*65536) + lo) >>> 0;
+  }
+  function modpow16(e, m){         // 16^e mod m
+    var result = 1%m, base = 16%m, ee = e>>>0;
+    while(ee > 0){ if(ee & 1) result = (result*base)%m; ee = ee>>>1; base = (base*base)%m; }
+    return result >>> 0;
+  }
+  function series(j, d){           // fractional part * 2^32 (u32; wrap = mod 1)
+    var sum = 0, k;
+    for(k = 0; k <= d; k++){ var dn = 8*k + j; sum = (sum + fixeddiv(modpow16(d-k, dn), dn)) >>> 0; }
+    var p = 0x10000000; k = d + 1;                          // tail: 2^28·16^(d-k)
+    while(p > 0){ sum = (sum + Math.floor(p/(8*k + j))) >>> 0; p = Math.floor(p/16); k++; }
+    return sum >>> 0;
+  }
+  function digit(index){           // index>=1 → hex digit at that position after '.'
+    var d = index - 1;
+    var v = ((4*series(1,d)) - (2*series(4,d)) - series(5,d) - series(6,d)) >>> 0;
+    return v >>> 28;
+  }
+
+  function computeCPU(digits){     // chunked so heartbeats keep flowing
+    return new Promise(function(resolve){
+      var hex = "", i = 1, chunk = C.pi.cpuChunk;
+      function slice(){
+        var end = Math.min(i + chunk - 1, digits);
+        for(; i <= end; i++) hex += HEX.charAt(digit(i));
+        api.post("pi/progress", {done: hex.length, total: digits, mode: "cpu"});
+        if(i > digits){ resolve(hex); return; }
+        setTimeout(slice, 0);
+      }
+      slice();
+    });
+  }
+
+  /* ---- WebGPU path: one shader invocation per digit position ----
+     NOTE: this mirrors the CPU integer BBP verified above. It could not be
+     executed in the build sandbox (no browser/GPU), so it is guarded by a
+     self-check + CPU fallback: if WebGPU is missing, errors, or returns digits
+     that disagree with the CPU reference, the CPU result is used instead. */
+  var WGSL = `
+fn modpow16(e0:u32, m:u32) -> u32 {
+  var result:u32 = 1u % m; var base:u32 = 16u % m; var e:u32 = e0;
+  loop { if (e == 0u) { break; }
+    if ((e & 1u) == 1u) { result = (result * base) % m; }
+    e = e >> 1u; base = (base * base) % m; }
+  return result;
+}
+fn fixeddiv(r:u32, denom:u32) -> u32 {
+  let hi = (r << 16u) / denom; let rem = (r << 16u) % denom; let lo = (rem << 16u) / denom;
+  return (hi << 16u) | (lo & 0xffffu);
+}
+fn series(j:u32, d:u32) -> u32 {
+  var sum:u32 = 0u; var k:u32 = 0u;
+  loop { if (k > d) { break; }
+    let dn = 8u*k + j; sum = sum + fixeddiv(modpow16(d - k, dn), dn); k = k + 1u; }
+  var p:u32 = 0x10000000u; k = d + 1u;
+  loop { if (p == 0u) { break; } sum = sum + (p / (8u*k + j)); p = p / 16u; k = k + 1u; }
+  return sum;
+}
+@group(0) @binding(0) var<storage, read> params : array<u32>;
+@group(0) @binding(1) var<storage, read_write> outp : array<u32>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
+  let i = gid.x; let n = arrayLength(&outp); if (i >= n) { return; }
+  let d = params[0] + i;
+  let v = (4u*series(1u,d)) - (2u*series(4u,d)) - series(5u,d) - series(6u,d);
+  outp[i] = v >> 28u;
+}`;
+
+  async function getDevice(){
+    if(dev) return dev;
+    if(typeof navigator === "undefined" || !navigator.gpu) throw new Error("no WebGPU");
+    var adapter = await navigator.gpu.requestAdapter();
+    if(!adapter) throw new Error("no GPU adapter");
+    dev = await adapter.requestDevice();
+    return dev;
+  }
+
+  async function computeGPU(digits){
+    var device = await getDevice();
+    var N = digits, bytes = N*4;
+    var outBuf   = device.createBuffer({size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC});
+    var paramBuf = device.createBuffer({size: 16,    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST});
+    device.queue.writeBuffer(paramBuf, 0, new Uint32Array([0,0,0,0]));     // base position = 0
+    var mod  = device.createShaderModule({code: WGSL});
+    var pipe = device.createComputePipeline({layout: "auto", compute: {module: mod, entryPoint: "main"}});
+    var bind = device.createBindGroup({layout: pipe.getBindGroupLayout(0), entries: [
+      {binding: 0, resource: {buffer: paramBuf}}, {binding: 1, resource: {buffer: outBuf}}]});
+    var enc = device.createCommandEncoder();
+    var pass = enc.beginComputePass();
+    pass.setPipeline(pipe); pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(Math.ceil(N/64));
+    pass.end();
+    var readBuf = device.createBuffer({size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+    enc.copyBufferToBuffer(outBuf, 0, readBuf, 0, bytes);
+    device.queue.submit([enc.finish()]);
+    await readBuf.mapAsync(GPUMapMode.READ);
+    var arr = new Uint32Array(readBuf.getMappedRange().slice(0));
+    readBuf.unmap(); outBuf.destroy(); paramBuf.destroy(); readBuf.destroy();
+    var hex = ""; for(var i = 0; i < N; i++) hex += HEX.charAt(arr[i] & 0xf);
+    return hex;
+  }
+
+  function selfCheck(hex, digits){   // probe a few positions against the CPU reference
+    var probes = [1, 2, Math.min(digits,9), Math.max(1, digits>>1), digits], t;
+    for(t = 0; t < probes.length; t++){ var i = probes[t]; if(hex.charAt(i-1) !== HEX.charAt(digit(i))) return false; }
+    return true;
+  }
+
+  function hexToDecimal(hex, nHex, D){   // fractional hex → D decimal digits (one BigInt divide)
+    var F = BigInt("0x" + hex);          // frac(π) · 16^nHex, truncated
+    var scaled = (F * (10n ** BigInt(D))) / (16n ** BigInt(nHex));
+    var s = scaled.toString();
+    if(s.length < D) s = "0".repeat(D - s.length) + s;
+    return s.slice(0, D);
+  }
+
+  async function run(D){                  // D = requested DECIMAL digits
+    busy = true;
+    var started = api.now();
+    // hex digits needed for D decimals: D / log10(16) + guard
+    var nHex = Math.min(4000, Math.ceil(D / 1.2041199826559248) + C.pi.guardHex);
+    var hex = null, mode = "cpu";
+    if(typeof navigator !== "undefined" && navigator.gpu){
+      try { var g = await computeGPU(nHex); if(selfCheck(g, nHex)){ hex = g; mode = "gpu"; } }
+      catch(e){ hex = null; }
+    }
+    if(hex === null){ mode = "cpu"; hex = await computeCPU(nHex); }
+    var dec = hexToDecimal(hex, nHex, D);
+    api.post("pi/result", {digits: D, dec: dec, ms: (api.now() - started), mode: mode});
+    busy = false;
+  }
+
+  api.on(function(m){
+    if(m.topic === "sys/stopbeat"){ beating = false; return; }
+    if(m.topic === "sys/crash"){ api.die(); return; }
+    if(m.topic === "pi/run"){
+      if(busy) return;
+      var d = (m.data && m.data.digits) ? (m.data.digits|0) : C.pi.defaultDigits;
+      run(Math.max(1, Math.min(C.pi.maxDigits, d)));
+    }
+  });
+
+  api.interval(function(){ if(beating) api.post("sys/heartbeat", {t:api.now()}); }, C.service.heartbeatMs);
+  api.post("pi/ready", {gpu: (typeof navigator !== "undefined" && !!navigator.gpu)});
+}

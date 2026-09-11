@@ -67,6 +67,18 @@ export const CONFIG = {
                               // analyzer trips; with it OFF, the analyzer notices.
   },
 
+  /* pi — computes digits of π with the BBP spigot formula. BBP extracts the
+     n-th HEX digit independently, so the heavy part is embarrassingly parallel
+     (GPU via WebGPU, else the same integer algorithm on the CPU); the hex
+     fraction is then converted to decimal with a single big-integer divide.
+     Capped so the hex count stays u32-exact (no f64 in WGSL). */
+  pi: {
+    defaultDigits: 100,       // DECIMAL digits of π
+    maxDigits: 4000,          // decimal-digit ceiling (keeps the hex count u32-exact)
+    guardHex: 20,             // extra hex digits so the last decimal digits stay exact
+    cpuChunk: 64              // hex digits per cooperative slice on the CPU path
+  },
+
   /* capability policy — topic prefixes each source may publish.
      This is POLICY (data); the routing MECHANISM in app.js never changes. */
   capabilities: {
@@ -76,6 +88,7 @@ export const CONFIG = {
     wasmcompute: ["wasm/", "sys/heartbeat"],
     jsminer:     ["js/", "sys/heartbeat"],
     analyzer:    ["analyzer/", "sys/heartbeat"],
+    pi:          ["pi/", "sys/heartbeat"],
     operator:    [""]        // the operator/UI is privileged
   },
   defaultPolicy: "strict", // "strict" | "permissive"

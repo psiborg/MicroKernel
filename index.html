@@ -93,6 +93,16 @@
             <div class="result-chip" id="compute-result">no job run yet — clock keeps ticking while it computes</div>
           </div>
 
+          <div class="group">
+            <div class="glabel"><span class="tag">π digits</span> — BBP spigot → decimal · <span id="pi-mode" class="pi-mode">detecting…</span></div>
+            <div class="line">
+              <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">decimal digits of π</span>
+              <input type="number" id="pi-input" value="100" min="1" max="4000" step="50" />
+              <button id="btn-pi">Compute</button>
+            </div>
+            <div class="pi-out" id="pi-out">each hex digit is independent → parallel on the GPU, then converted to decimal</div>
+          </div>
+
           <div class="divider"></div>
 
           <div class="group">
@@ -197,7 +207,7 @@
         <p>Four parts, mirroring a real microkernel:</p>
         <ul class="g-parts">
           <li><span class="g-dot k"></span><b>Kernel</b> — a publish/subscribe message router plus a capability policy. Pure mechanism: it moves messages and checks permissions, and knows nothing about what the services actually do.</li>
-          <li><span class="g-dot s"></span><b>Services</b> — six isolated “drivers,” each in its own Web Worker. Any one can crash without touching the others.</li>
+          <li><span class="g-dot s"></span><b>Services</b> — seven isolated “drivers,” each in its own Web Worker. Any one can crash without touching the others.</li>
           <li><span class="g-dot v"></span><b>Supervisor</b> — a reincarnation server. Every service emits a heartbeat; miss enough of them and the supervisor declares it dead and restarts it.</li>
           <li><span class="g-dot o"></span><b>Operator</b> — the dashboard you’re looking at: a privileged consumer of the bus.</li>
         </ul>
@@ -229,6 +239,7 @@
           <li><b>wasmcompute</b> — SHA-256 mining in a real WebAssembly module (4-way SIMD, scalar fallback).</li>
           <li><b>jsminer</b> — the identical mining in pure JavaScript, to race wasm.</li>
           <li><b>analyzer</b> — a telemetry watchdog: rolling stats, spike alerts, and input-loss detection.</li>
+          <li><b>pi</b> — decimal digits of π via the BBP spigot; runs on the GPU (WebGPU) when available, else the CPU.</li>
         </ul>
         <h3>Concept → where to see it</h3>
         <table class="g-table">
@@ -241,6 +252,7 @@
           <tr><td>Worker isolation</td><td>each service is its own thread</td></tr>
           <tr><td>WebAssembly &amp; SIMD</td><td>the JS-vs-wasm race</td></tr>
           <tr><td>Service composition</td><td>analyzer consuming telemetry</td></tr>
+          <tr><td>GPU compute (WebGPU)</td><td>the π digit service</td></tr>
         </table>
         <h3>Controls</h3>
         <ul class="g-ref">

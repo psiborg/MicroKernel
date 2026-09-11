@@ -140,6 +140,18 @@ input[type=number]:focus-visible{outline:2px solid var(--signal);outline-offset:
 }
 .result-chip b{color:var(--signal)}
 
+/* pi (BBP digits) */
+.pi-mode{font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+.pi-mode.gpu{color:var(--signal)}
+.pi-mode.cpu{color:var(--warn)}
+.pi-out{
+  font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--ink-dim);
+  background:var(--panel-2);border:1px solid var(--line);border-radius:3px;padding:8px 9px;
+  max-height:120px;overflow-y:auto;word-break:break-all;
+}
+.pi-out.done{color:var(--signal)}
+.pi-out.done::first-line{color:var(--ink)}
+
 /* fight card — JS vs WASM tale of the tape */
 .fightcard{
   display:grid;grid-template-columns:1fr 96px 1fr;gap:1px;

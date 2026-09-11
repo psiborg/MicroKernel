@@ -174,6 +174,27 @@ export const UI = {
       "π(" + d.n.toLocaleString() + ") = <b>" + d.count.toLocaleString() + "</b> primes · " +
       d.ms + "ms · <b>" + d.ver + "</b>";
   },
+  // ---- pi (BBP digits, GPU/CPU) ----
+  piReady:function(gpu){
+    var el = document.getElementById("pi-mode"); if(!el) return;
+    el.textContent = gpu ? "GPU ready (WebGPU)" : "CPU only";
+    el.className = "pi-mode " + (gpu ? "gpu" : "cpu");
+  },
+  piStart:function(digits){
+    var out = document.getElementById("pi-out");
+    if(out){ out.className = "pi-out"; out.textContent = "computing " + digits.toLocaleString() + " decimal digits…"; }
+  },
+  piProgress:function(d){
+    var out = document.getElementById("pi-out");
+    if(out) out.textContent = "computing… " + Math.round(100 * d.done / d.total) + "%";
+  },
+  piResult:function(d){
+    var out = document.getElementById("pi-out");
+    if(out){ out.className = "pi-out done"; out.textContent = "3." + d.dec; }
+    var m = document.getElementById("pi-mode");
+    if(m){ m.textContent = (d.mode === "gpu" ? "GPU" : "CPU") + " · " + d.digits.toLocaleString() + " digits · " + d.ms + "ms";
+           m.className = "pi-mode " + (d.mode === "gpu" ? "gpu" : "cpu"); }
+  },
   // ---- analyzer (telemetry watchdog) live card line ----
   analyzerStat:function(d){
     var el = document.getElementById("analyzer-live"); if(!el) return;
@@ -208,7 +229,7 @@ export const UI = {
   renderCards:function(){
     var grid = document.getElementById("svc-grid");
     grid.innerHTML = "";
-    ["clock","compute","telemetry","jsminer","wasmcompute","analyzer"].forEach(function(name){
+    ["clock","compute","telemetry","jsminer","wasmcompute","analyzer","pi"].forEach(function(name){
       var s = Supervisor.state[name], spec = Supervisor.specs[name], rec = Kernel.services[name];
       var host = rec ? rec.host : (spec.backend==="worker"&&workers.ok?"worker":"local");
       var el = document.createElement("div"); el.className="svc";

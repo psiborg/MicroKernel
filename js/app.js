@@ -21,7 +21,7 @@
 
 import { CONFIG as CFG } from "./config.js";
 import { workers } from "./ports.js";
-import { clockService, telemetryService, computeServiceV1, computeServiceV2, wasmComputeService, jsMinerService, analyzerService } from "./services.js";
+import { clockService, telemetryService, computeServiceV1, computeServiceV2, wasmComputeService, jsMinerService, analyzerService, piService } from "./services.js";
 import { Kernel } from "./kernel.js";
 import { Supervisor } from "./supervisor.js";
 import { Log, UI } from "./instruments.js";
@@ -49,16 +49,17 @@ function boot(){
   // wiring: operator subscriptions + service definitions (composition happens here)
   Kernel.subscribe("operator", ["clock/tick","telemetry/reading","compute/result",
                                  "wasm/ready","wasm/error","wasm/progress","wasm/result",
-                                 "js/progress","js/result","analyzer/stat","analyzer/alert","sys/control"]);
+                                 "js/progress","js/result","analyzer/stat","analyzer/alert","pi/ready","pi/progress","pi/result","sys/control"]);
   Supervisor.define("clock",       {fn:clockService,       backend:"worker", subs:[], version:"v1"});
   Supervisor.define("telemetry",   {fn:telemetryService,   backend:"worker", subs:[], version:"v1"});
   Supervisor.define("compute",     {fn:computeServiceV1,   backend:"worker", subs:["compute/run"], version:"v1"});
   Supervisor.define("wasmcompute", {fn:wasmComputeService, backend:"worker", subs:["wasm/run","wasm/stop"], version:"v1"});
   Supervisor.define("jsminer",     {fn:jsMinerService,     backend:"worker", subs:["js/run","js/stop"], version:"v1"});
   Supervisor.define("analyzer",    {fn:analyzerService,    backend:"worker", subs:["telemetry/reading"], version:"v1"});
+  Supervisor.define("pi",          {fn:piService,          backend:"worker", subs:["pi/run"], version:"v1"});
 
   setModeBadge();
-  ["clock","telemetry","compute","wasmcompute","jsminer","analyzer"].forEach(function(n){ Supervisor.spawn(n); });
+  ["clock","telemetry","compute","wasmcompute","jsminer","analyzer","pi"].forEach(function(n){ Supervisor.spawn(n); });
   UI.renderCards();
 
   Log.add("sig", workers.ok
@@ -76,7 +77,7 @@ function boot(){
       if(Kernel.routed === 0){
         workers.ok = false; setModeBadge();
         Log.add("sup", "no signal from workers — falling back to simulated main-thread services");
-        ["clock","telemetry","compute","wasmcompute","jsminer","analyzer"].forEach(function(n){
+        ["clock","telemetry","compute","wasmcompute","jsminer","analyzer","pi"].forEach(function(n){
           var old = Kernel.services[n]; if(old&&old.port) old.port.terminate();
           Supervisor.specs[n].backend = "local"; Supervisor.spawn(n);
         });
@@ -134,6 +135,13 @@ function wireControls(){
     var bits = readBits();
     UI.soloArm("js");
     Kernel.publish("operator", "js/run", {bits:bits});
+  });
+
+  document.getElementById("btn-pi").addEventListener("click", function(){
+    var raw = parseInt(document.getElementById("pi-input").value,10) || CFG.pi.defaultDigits;
+    var digits = Math.max(1, Math.min(CFG.pi.maxDigits, raw));
+    UI.piStart(digits);
+    Kernel.publish("operator", "pi/run", {digits:digits});
   });
 
   document.getElementById("btn-race").addEventListener("click", function(){

@@ -200,7 +200,7 @@ actually does. Its whole surface:
 
 ### Services
 
-Six isolated "drivers":
+Seven isolated "drivers":
 
 - **clock** — emits `clock/tick` once a second. Pure liveness.
 - **telemetry** — emits `telemetry/reading` (~800 ms) that feeds the sparkline.
@@ -217,6 +217,10 @@ Six isolated "drivers":
   *another* service: it subscribes to `telemetry/reading`, tracks a rolling
   mean/σ, and raises `analyzer/alert` on a spike or when its input goes silent.
   See [Composition: a service that watches a service](#composition-a-service-that-watches-a-service).
+- **pi** — computes decimal digits of π. It extracts the digits in parallel with
+  the BBP spigot (base-16), running as a **WebGPU** compute shader when the
+  browser exposes a GPU and on the CPU otherwise, then converts the result to
+  decimal. See [GPU compute: digits of π](#gpu-compute-digits-of-pi).
 
 Every service also emits `sys/heartbeat` (interval from `CONFIG.service`). Stop
 the heartbeats and the supervisor concludes the service is gone.
@@ -327,6 +331,7 @@ from a service.
 | `mine.defaultBits / minBits / maxBits` | 20 / 8 / 32 | shared difficulty (leading zero bits); 32 is the ceiling — single-word target check plus a u32 nonce space |
 | `mine.wasmChunk / jsChunk` | 400000 / 120000 | hashes per cooperative slice (wasm / JS) |
 | `analyzer.window / sigma / staleMs` | 16 / 2.2 / 3500 | rolling-window size · spike threshold (σ) · input-loss timeout |
+| `pi.defaultDigits / maxDigits / guardHex / cpuChunk` | 100 / 4000 / 20 / 64 | π **decimal** digits default · ceiling · extra hex for exact conversion · CPU slice |
 | `capabilities` | (per service) | topic prefixes each source may publish |
 | `defaultPolicy` | `"strict"` | starting policy mode |
 | `tape.pxPerMs` | 0.055 | bus-tape scroll speed |
@@ -365,6 +370,10 @@ components.
 | `telemetry/reading` | telemetry | operator, **analyzer** | `{temp, load}` — now has a second subscriber |
 | `analyzer/stat` | analyzer | operator | `{temp, mean, sd, z, n, cap}` rolling stats |
 | `analyzer/alert` | analyzer | operator | `{level:"spike"|"stale"|"recover", …}` |
+| `pi/run` | operator | pi | `{digits}` compute N hex digits of π |
+| `pi/ready` | pi | operator | `{gpu}` whether WebGPU is available |
+| `pi/progress` | pi | operator | `{done, total, mode}` (CPU path) |
+| `pi/result` | pi | operator | `{digits, dec, ms, mode:"gpu"|"cpu"}` (decimal string) |
 | `sys/heartbeat` | all services | *(kernel → supervisor)* | liveness; never fanned out |
 | `sys/stopbeat` | operator → service | service | soft crash (hang) |
 | `sys/crash` | operator → service | service | hard crash (`die()`) |
@@ -468,6 +477,59 @@ That's the honest takeaway: WebAssembly's decisive advantages are **SIMD**,
 performance** (no warmup, no GC pauses, no deopts), and shipping **non-JS
 languages** — not simply "it's compiled." The tape lets you see it rather than
 take it on faith.
+
+---
+
+---
+
+## GPU compute: digits of π
+
+Most "fast π" algorithms (Chudnovsky and friends) compute *all* digits up to
+position N using arbitrary-precision bignum with carry propagation — inherently
+serial, and a poor fit for a GPU. The **BBP formula** is the opposite: it
+extracts the n-th *hexadecimal* digit of π on its own, without the digits before
+it, via modular exponentiation in fixed precision. Every digit position is an
+**independent** computation, which makes the work embarrassingly parallel — the
+same shape as the SIMD miner (one lane per nonce), but here one GPU thread per
+digit.
+
+So the `pi` service extracts hex digits with the **identical integer algorithm**
+on two paths, then converts:
+
+- **GPU** — a **WebGPU** compute shader (WGSL), one invocation per hex-digit
+  position, dispatched in a single pass. Used automatically when `navigator.gpu`
+  exists.
+- **CPU** — the same BBP in JavaScript, chunked so heartbeats keep flowing. Used
+  when WebGPU is absent, and as a safety net (below).
+- **→ decimal** — the assembled hex fraction is converted to the requested number
+  of decimal digits with a **single big-integer divide** (`BigInt`). That step is
+  inherently serial, but it's a cheap post-process; the expensive parallel work
+  is the hex extraction. A handful of guard hex digits are computed so the last
+  decimal digits are exact.
+
+Everything in the extraction is `u32` integer arithmetic with 32-bit fixed-point
+accumulation — WGSL has no `f64`, so doubles are off the table — which stays
+exact to the ceiling (denominators stay under 2¹⁵, so products fit in `u32`). The
+service reports which path ran (`pi/result.mode`); the control header shows
+`GPU ready` or `CPU only`.
+
+Two honest notes, both instructive:
+
+- **Why hex first?** BBP is a base-16 spigot — that's what makes each digit
+  independent and therefore parallel. There's no equally-parallel base-10 formula;
+  the plain decimal spigot (Rabinowitz–Wagon) is *sequential*, which is exactly
+  why it wouldn't run on the GPU. So we parallelise in hex and convert once at the
+  end — the split between parallel and serial work, made concrete.
+- **The GPU path mirrors the CPU reference but couldn't be run in the build
+  sandbox** (no browser or GPU there). It's guarded three ways: used only when
+  WebGPU is present; any error falls back to the CPU; and the GPU output is
+  **self-checked** against the CPU at several positions, so a mismatch discards it
+  and recomputes on the CPU. The digits are always correct — the only question is
+  which processor produced them.
+
+BBP is O(N²) to lay out all N digits in a row, so it's not how you'd race
+Chudnovsky to a billion decimals — its virtue is *random access* and
+*parallelism*, which is exactly what lets the GPU shine.
 
 ---
 
@@ -600,7 +662,7 @@ file:
 2. **`ports.js`** — `workers.ok` probe/holder, `makeWorkerPort`, `makeLocalPort`
    (both implement the pause gate).
 3. **`services.js`** — `clockService`, `telemetryService`, `computeServiceV1/V2`,
-   `wasmComputeService`, `jsMinerService`, `analyzerService` (read timings from `api.cfg`; **no scope capture**).
+   `wasmComputeService`, `jsMinerService`, `analyzerService`, `piService` (read timings from `api.cfg`; **no scope capture**).
 4. **`kernel.js`** — `Kernel`: routing + `allow` policy (reads
    `CONFIG.capabilities`).
 5. **`supervisor.js`** — `Supervisor`: `define` / `spawn` / `replace` / `beat` /
@@ -697,6 +759,7 @@ learning.
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
 | WebAssembly vs JS (SIMD) | Race / wasm solo / JS solo | `wasmComputeService` (SIMD), `jsMinerService` |
 | Service composition / dependency health | crash telemetry, watch analyzer | `analyzerService` ← `telemetry/reading` |
+| GPU compute (data parallelism) | Compute π digits | `piService` — WebGPU shader + CPU fallback |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---

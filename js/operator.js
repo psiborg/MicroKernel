@@ -57,6 +57,13 @@ export const Operator = {
       else if(data.level === "recover") Log.add("sig",  "analyzer: telemetry restored — resuming");
       else if(data.level === "spike")   Log.add("warn", "analyzer: spike " + data.temp + "° · z=" + data.z + " (mean " + data.mean + "°)");
     }
+    else if(topic === "pi/ready"){ UI.piReady(data.gpu); }
+    else if(topic === "pi/progress"){ UI.piProgress(data); }
+    else if(topic === "pi/result"){
+      UI.piResult(data);
+      Log.add(data.mode === "gpu" ? "sig" : "pulse",
+        "pi: " + data.digits.toLocaleString() + " decimal digits via " + (data.mode === "gpu" ? "GPU (WebGPU)" : "CPU") + " in " + data.ms + "ms");
+    }
     else if(topic === "sys/control"){
       Log.add("sig", "operator received sys/control from " + src + " (policy is permissive)");
     }
