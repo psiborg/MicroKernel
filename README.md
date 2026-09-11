@@ -56,6 +56,7 @@ js/
   instruments.js      Tape, Spark, Log, UI
   runtime.js          Stop/Play + the pausable uptime clock
   app.js              composition root: imports, boot, controls, SW registration
+  guide.js            welcome dialog — About / Tutorial / Reference tabs
 wasm/
   miner.wasm          prebuilt scalar SHA-256 miner (fetched at runtime, precached)
   miner.simd.wasm     prebuilt 4-way SIMD miner (preferred; scalar is the fallback)
@@ -136,12 +137,17 @@ rough order:
    typically wins ~3–4× — but `wasm solo` / `JS solo` and the scalar fallback show
    why that gap is all about SIMD; see
    [The WebAssembly service](#the-webassembly-service).
-6. **Upgrade compute → v2**. The service's code is swapped in place (trial
+6. **Watch the analyzer.** It rides on telemetry's readings (a service consuming
+   a service) and flags spikes on its card. Then crash **telemetry**: with
+   reincarnation on it heals before the analyzer notices; turn reincarnation off
+   and crash it again, and the analyzer raises "input lost." See
+   [Composition](#composition-a-service-that-watches-a-service).
+7. **Upgrade compute → v2**. The service's code is swapped in place (trial
    division → sieve), the version badge flips, and no page reload happens. Run a
    job before and after to compare timings.
-7. **Move → worker/local** on any card. Callers address the service by topic, so
+8. **Move → worker/local** on any card. Callers address the service by topic, so
    nothing else changes. That's location transparency.
-8. **Provoke violation**. Telemetry tries to publish a `sys/control` message.
+9. **Provoke violation**. Telemetry tries to publish a `sys/control` message.
    Under **Strict** policy the kernel denies it (red tick on the tape, a
    `DENIED` log line). Flip to **Permissive** and the identical message flows.
    Same mechanism, different policy.
@@ -194,7 +200,7 @@ actually does. Its whole surface:
 
 ### Services
 
-Five isolated "drivers":
+Six isolated "drivers":
 
 - **clock** — emits `clock/tick` once a second. Pure liveness.
 - **telemetry** — emits `telemetry/reading` (~800 ms) that feeds the sparkline.
@@ -207,6 +213,10 @@ Five isolated "drivers":
 - **jsminer** — the *identical* SHA-256 PoW in pure JavaScript, on `js/run`. It
   exists to race `wasmcompute` on the same tape; see
   [The WebAssembly service](#the-webassembly-service).
+- **analyzer** — a telemetry watchdog, and the only service that consumes
+  *another* service: it subscribes to `telemetry/reading`, tracks a rolling
+  mean/σ, and raises `analyzer/alert` on a spike or when its input goes silent.
+  See [Composition: a service that watches a service](#composition-a-service-that-watches-a-service).
 
 Every service also emits `sys/heartbeat` (interval from `CONFIG.service`). Stop
 the heartbeats and the supervisor concludes the service is gone.
@@ -316,6 +326,7 @@ from a service.
 | `wasm.file / simdFile` | `./wasm/miner.wasm` / `.simd.wasm` | scalar / SIMD module paths (resolved to absolute in boot) |
 | `mine.defaultBits / minBits / maxBits` | 20 / 8 / 32 | shared difficulty (leading zero bits); 32 is the ceiling — single-word target check plus a u32 nonce space |
 | `mine.wasmChunk / jsChunk` | 400000 / 120000 | hashes per cooperative slice (wasm / JS) |
+| `analyzer.window / sigma / staleMs` | 16 / 2.2 / 3500 | rolling-window size · spike threshold (σ) · input-loss timeout |
 | `capabilities` | (per service) | topic prefixes each source may publish |
 | `defaultPolicy` | `"strict"` | starting policy mode |
 | `tape.pxPerMs` | 0.055 | bus-tape scroll speed |
@@ -351,6 +362,9 @@ components.
 | `js/run` | operator | jsminer | `{bits, salt?}` mine the identical PoW in JS |
 | `js/progress` | jsminer | operator | `{hashes, rate, bits}` live hashrate |
 | `js/result` | jsminer | operator | `{nonce, hashHex, bits, salt, hashes, ms, rate}` |
+| `telemetry/reading` | telemetry | operator, **analyzer** | `{temp, load}` — now has a second subscriber |
+| `analyzer/stat` | analyzer | operator | `{temp, mean, sd, z, n, cap}` rolling stats |
+| `analyzer/alert` | analyzer | operator | `{level:"spike"|"stale"|"recover", …}` |
 | `sys/heartbeat` | all services | *(kernel → supervisor)* | liveness; never fanned out |
 | `sys/stopbeat` | operator → service | service | soft crash (hang) |
 | `sys/crash` | operator → service | service | hard crash (`die()`) |
@@ -457,7 +471,36 @@ take it on faith.
 
 ---
 
-## Developer guide
+## Composition: a service that watches a service
+
+Every other service either just publishes (clock, telemetry) or answers the
+operator (compute, the two miners). **analyzer** is the first that depends on
+*another service*: its subscription is `telemetry/reading`, so telemetry now has
+two consumers — the operator's sparkline and the analyzer — off the same publish.
+That alone is the point worth seeing: composition is just another subscriber on
+the bus, no wiring between the two services required.
+
+It keeps a rolling window of the last `analyzer.window` readings and does two
+things. It computes a running mean/σ and raises `analyzer/alert {level:"spike"}`
+when a new reading lands `sigma` deviations out (amber on the card and in the
+log). And it watches the *health of its input*: if no reading arrives for
+`analyzer.staleMs`, it raises `{level:"stale"}` — "input lost" — then `"recover"`
+when telemetry returns.
+
+That input-health check turns the supervisor controls into a two-mode lesson:
+
+- **Reincarnation ON, then crash telemetry.** The supervisor declares telemetry
+  dead (~`deathMs`) and reincarnates it before `staleMs` elapses, so the analyzer
+  *never trips* — you watch a dependency fail and self-heal underneath a consumer
+  that never noticed. `staleMs` (3500) is set deliberately above `deathMs` (1900)
+  to make this the default outcome.
+- **Reincarnation OFF, then crash telemetry.** Nothing heals it; `staleMs`
+  elapses and the analyzer flags "input lost." Toggle reincarnation back on (or
+  restart telemetry) and it prints "input restored."
+
+And crash the **analyzer** itself: it comes back with an empty window and has to
+re-learn its baseline. Restart is not the same as restored state — the reason
+real systems pair a supervisor with persistence.
 
 ### The service contract
 
@@ -557,7 +600,7 @@ file:
 2. **`ports.js`** — `workers.ok` probe/holder, `makeWorkerPort`, `makeLocalPort`
    (both implement the pause gate).
 3. **`services.js`** — `clockService`, `telemetryService`, `computeServiceV1/V2`,
-   `wasmComputeService`, `jsMinerService` (read timings from `api.cfg`; **no scope capture**).
+   `wasmComputeService`, `jsMinerService`, `analyzerService` (read timings from `api.cfg`; **no scope capture**).
 4. **`kernel.js`** — `Kernel`: routing + `allow` policy (reads
    `CONFIG.capabilities`).
 5. **`supervisor.js`** — `Supervisor`: `define` / `spawn` / `replace` / `beat` /
@@ -653,6 +696,7 @@ learning.
 | Location transparency | Move | `makeWorkerPort` / `makeLocalPort` |
 | Hot swap | Upgrade | `Supervisor.replace`, `computeServiceV2` |
 | WebAssembly vs JS (SIMD) | Race / wasm solo / JS solo | `wasmComputeService` (SIMD), `jsMinerService` |
+| Service composition / dependency health | crash telemetry, watch analyzer | `analyzerService` ← `telemetry/reading` |
 | Freeze / resume | Stop / Play | `Runtime.pause` / `resume`, port pause gate |
 
 ---

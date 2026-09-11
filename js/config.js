@@ -56,6 +56,17 @@ export const CONFIG = {
     jsChunk: 120000           // smaller slice for the slower pure-JS miner
   },
 
+  /* analyzer — a telemetry watchdog (a service that consumes another service).
+     Keeps a rolling window of readings and flags anomalies + input loss. */
+  analyzer: {
+    window: 16,               // readings kept for the rolling mean/σ baseline
+    sigma: 2.2,               // |z| above this on a new reading → "spike" alert
+    staleMs: 3500             // no telemetry for this long → "input lost" alert.
+                              // Deliberately > supervisor.deathMs (1900) so that
+                              // with reincarnation ON telemetry heals before the
+                              // analyzer trips; with it OFF, the analyzer notices.
+  },
+
   /* capability policy — topic prefixes each source may publish.
      This is POLICY (data); the routing MECHANISM in app.js never changes. */
   capabilities: {
@@ -64,6 +75,7 @@ export const CONFIG = {
     compute:     ["compute/", "sys/heartbeat"],
     wasmcompute: ["wasm/", "sys/heartbeat"],
     jsminer:     ["js/", "sys/heartbeat"],
+    analyzer:    ["analyzer/", "sys/heartbeat"],
     operator:    [""]        // the operator/UI is privileged
   },
   defaultPolicy: "strict", // "strict" | "permissive"

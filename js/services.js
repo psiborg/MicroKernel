@@ -258,3 +258,63 @@ export function jsMinerService(api){
 
   api.interval(function(){ if(beating) api.post("sys/heartbeat", {t:api.now()}); }, C.service.heartbeatMs);
 }
+
+/* ----------------------------------------------------------------------------
+   analyzer — a telemetry watchdog, and the first service that depends on ANOTHER
+   service. It subscribes to telemetry/reading, keeps a rolling window, and flags:
+     • spike   — a new reading lands |z| ≥ sigma from the window mean.
+     • stale   — no reading for staleMs → its input dependency is gone.
+     • recover — telemetry resumes after a stale spell.
+   Teaches two ideas the other services don't:
+     • composition — services wiring into services over the same bus.
+     • dependency health — crash telemetry with reincarnation OFF and the analyzer
+       raises "input lost"; with reincarnation ON the supervisor heals telemetry
+       before the analyzer even trips. Reincarnating the analyzer clears its
+       window: restart ≠ restored state.
+   Self-contained (no scope capture) like every service here.
+---------------------------------------------------------------------------- */
+export function analyzerService(api){
+  var C = api.cfg.service;      // heartbeatMs
+  var A = api.cfg.analyzer;     // window, sigma, staleMs
+  var beating = true;
+  var win = [];                 // recent temps — this service's own state
+  var last = api.now();         // time of the last telemetry reading seen
+  var stale = false;
+
+  api.on(function(m){
+    if(m.topic === "sys/stopbeat"){ beating = false; return; }
+    if(m.topic === "sys/crash"){ api.die(); return; }
+    if(m.topic === "telemetry/reading"){
+      var t = m.data.temp, i;
+      last = api.now();
+      if(stale){ stale = false; api.post("analyzer/alert", {level:"recover", t:last}); }
+
+      // rolling stats over the window established BEFORE this reading
+      var n = win.length, mean = 0, sd = 0, z = 0;
+      if(n >= 3){
+        var sum = 0; for(i=0;i<n;i++) sum += win[i]; mean = sum/n;
+        var v = 0; for(i=0;i<n;i++){ var d = win[i]-mean; v += d*d; } sd = Math.sqrt(v/n);
+        z = sd > 0 ? (t-mean)/sd : 0;
+      }
+      win.push(t); if(win.length > A.window) win.shift();
+
+      api.post("analyzer/stat", {
+        temp: t, mean: Math.round(mean*10)/10, sd: Math.round(sd*100)/100,
+        z: Math.round(z*100)/100, n: win.length, cap: A.window
+      });
+      if(n >= A.window && Math.abs(z) >= A.sigma){
+        api.post("analyzer/alert", {level:"spike", temp:t, mean:Math.round(mean*10)/10, z:Math.round(z*100)/100, t:last});
+      }
+    }
+  });
+
+  // heartbeat + a watchdog on its own input dependency
+  api.interval(function(){
+    if(!beating) return;
+    api.post("sys/heartbeat", {t:api.now()});
+    if(!stale && (api.now() - last) > A.staleMs){
+      stale = true;
+      api.post("analyzer/alert", {level:"stale", since:(api.now()-last)|0, t:api.now()});
+    }
+  }, C.heartbeatMs);
+}

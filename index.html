@@ -25,6 +25,7 @@
     <div class="brand">
       <h1>µ<b>kernel</b></h1>
       <span class="sub">microkernel patterns, running in your browser</span>
+      <button class="guide-btn" id="guide-open" title="What is this? Tutorial &amp; reference">guide</button>
     </div>
     <div class="metrics">
       <div class="metric"><b id="m-msgs">0</b>messages routed</div>
@@ -175,6 +176,88 @@
   </div>
 
   <footer>a teaching model — services are Web Workers when the sandbox allows, else simulated on the main thread</footer>
+</div>
+
+<!-- WELCOME / GUIDE dialog -->
+<div class="modal-overlay" id="guide-overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="µkernel guide">
+    <div class="modal-head">
+      <div class="modal-title">µ<b>kernel</b> <span>— a microkernel OS, live in your browser</span></div>
+      <button class="modal-x" id="guide-close" aria-label="Close guide">×</button>
+    </div>
+    <div class="modal-tabs" role="tablist">
+      <button class="modal-tab active" data-tab="about" role="tab">About</button>
+      <button class="modal-tab" data-tab="tutorial" role="tab">Tutorial</button>
+      <button class="modal-tab" data-tab="reference" role="tab">Reference</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="tab-pane active" data-pane="about">
+        <p class="lead">This is a working model of a <b>microkernel operating system</b> — the design lineage of QNX and MINIX — running entirely in your browser. A tiny kernel passes messages between isolated services and enforces a security policy, while a supervisor keeps everything alive by watching heartbeats and reviving whatever dies.</p>
+        <p>Four parts, mirroring a real microkernel:</p>
+        <ul class="g-parts">
+          <li><span class="g-dot k"></span><b>Kernel</b> — a publish/subscribe message router plus a capability policy. Pure mechanism: it moves messages and checks permissions, and knows nothing about what the services actually do.</li>
+          <li><span class="g-dot s"></span><b>Services</b> — six isolated “drivers,” each in its own Web Worker. Any one can crash without touching the others.</li>
+          <li><span class="g-dot v"></span><b>Supervisor</b> — a reincarnation server. Every service emits a heartbeat; miss enough of them and the supervisor declares it dead and restarts it.</li>
+          <li><span class="g-dot o"></span><b>Operator</b> — the dashboard you’re looking at: a privileged consumer of the bus.</li>
+        </ul>
+        <p>The <b>bus tape</b> at the top is an oscilloscope of the message bus — every blip is one real message crossing the kernel: teal for heartbeats, blue for app traffic, amber for the supervisor, red for a denied or faulted message.</p>
+        <p class="g-cta">Nothing here is faked. Crash a service, pull its worker offline, hot-swap its code, tighten the security policy — and watch the system react live. The <b>Tutorial</b> tab walks you through it.</p>
+      </div>
+
+      <div class="tab-pane" data-pane="tutorial">
+        <p class="lead">Try these in order — each demonstrates a different OS idea. Keep an eye on the bus tape and the event log as you go.</p>
+        <ol class="g-steps">
+          <li><b>Stop / Play</b> (top of the control room) freezes the entire runtime — every worker, timer and heartbeat — then resumes exactly where it left off. Scheduling in one switch.</li>
+          <li><b>Hang</b> or <b>Crash</b> a service card. <i>Hang</i> stops its heartbeats (it looks alive but isn’t); <i>Crash</i> terminates its worker. Either way the supervisor notices within ~1.9s and reincarnates it.</li>
+          <li>Set <b>Reincarnation: OFF</b>, then crash something — it stays dead. Turn supervision back on and it’s revived. That’s the difference a supervisor makes.</li>
+          <li><b>Run</b> the compute service (N up to 400,000). The prime count runs inside a worker, so the interface never freezes — isolation buys responsiveness.</li>
+          <li><b>Race</b> at a difficulty. The same SHA-256 proof-of-work runs in pure JavaScript and in Rust→WebAssembly (4-way SIMD) at once; both land on the same nonce, and you watch the live hashrate gap.</li>
+          <li>Watch the <b>analyzer</b> — it rides on the telemetry service’s readings (a service consuming a service) and flags spikes. Crash <b>telemetry</b>: with reincarnation on it heals before the analyzer notices; with it off, the analyzer reports “input lost.”</li>
+          <li><b>Upgrade compute → v2</b>. Its code is replaced in place (trial division → sieve) with no page reload — a live hot-swap. Run a job before and after to compare.</li>
+          <li><b>Move → worker / local</b> on any card. Callers address services by topic, not by location, so nothing else changes. That’s location transparency.</li>
+          <li><b>Provoke a violation</b>: telemetry tries to publish a privileged control message. Under <b>Strict</b> policy the kernel denies it (a red blip and a denial in the log); flip to <b>Permissive</b> and the same message flows. Same mechanism, different policy.</li>
+        </ol>
+      </div>
+
+      <div class="tab-pane" data-pane="reference">
+        <h3>The six services</h3>
+        <ul class="g-ref">
+          <li><b>clock</b> — emits a tick every second. Pure liveness.</li>
+          <li><b>telemetry</b> — streams a fluctuating sensor reading into the sparkline.</li>
+          <li><b>compute</b> — counts primes on request; ships in two versions for the hot-swap demo.</li>
+          <li><b>wasmcompute</b> — SHA-256 mining in a real WebAssembly module (4-way SIMD, scalar fallback).</li>
+          <li><b>jsminer</b> — the identical mining in pure JavaScript, to race wasm.</li>
+          <li><b>analyzer</b> — a telemetry watchdog: rolling stats, spike alerts, and input-loss detection.</li>
+        </ul>
+        <h3>Concept → where to see it</h3>
+        <table class="g-table">
+          <tr><td>Message passing (pub/sub)</td><td>every blip on the bus tape</td></tr>
+          <tr><td>Fault isolation</td><td>crash one service; the rest run on</td></tr>
+          <tr><td>Supervision / reincarnation</td><td>Reincarnation toggle + heartbeats</td></tr>
+          <tr><td>Capability security</td><td>Strict / Permissive policy</td></tr>
+          <tr><td>Hot code swap</td><td>Upgrade compute → v2</td></tr>
+          <tr><td>Location transparency</td><td>Move → worker / local</td></tr>
+          <tr><td>Worker isolation</td><td>each service is its own thread</td></tr>
+          <tr><td>WebAssembly &amp; SIMD</td><td>the JS-vs-wasm race</td></tr>
+          <tr><td>Service composition</td><td>analyzer consuming telemetry</td></tr>
+        </table>
+        <h3>Controls</h3>
+        <ul class="g-ref">
+          <li><b>Stop / Play</b> — freeze or resume the whole runtime.</li>
+          <li><b>Reincarnation</b> — enable or disable the supervisor’s auto-restart.</li>
+          <li><b>Policy: Strict / Permissive</b> — enforce or relax the capability rules.</li>
+          <li><b>Hang / Crash / Move</b> — per-service fault injection and migration.</li>
+        </ul>
+        <p class="g-more">Full architecture notes, the message-topic catalog, and the WebAssembly ABI are in <b>README.md</b> in the download.</p>
+      </div>
+
+    </div>
+    <div class="modal-foot">
+      <span class="foot-note">everything you click maps to a real OS concept</span>
+      <button class="modal-go" id="guide-go">Start exploring →</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="./js/app.js"></script>

@@ -50,6 +50,13 @@ export const Operator = {
       else Log.add("pulse", "js mine: nonce " + data.nonce.toLocaleString() + " → " + data.hashHex.slice(0,16) + "… (" + data.bits + " bits, " + (data.rate/1e6).toFixed(2) + " MH/s)");
       noteRace("js", data);
     }
+    else if(topic === "analyzer/stat"){ UI.analyzerStat(data); }
+    else if(topic === "analyzer/alert"){
+      UI.analyzerAlert(data);
+      if(data.level === "stale")        Log.add("bad",  "analyzer: input lost — no telemetry for " + data.since + "ms (dependency down)");
+      else if(data.level === "recover") Log.add("sig",  "analyzer: telemetry restored — resuming");
+      else if(data.level === "spike")   Log.add("warn", "analyzer: spike " + data.temp + "° · z=" + data.z + " (mean " + data.mean + "°)");
+    }
     else if(topic === "sys/control"){
       Log.add("sig", "operator received sys/control from " + src + " (policy is permissive)");
     }

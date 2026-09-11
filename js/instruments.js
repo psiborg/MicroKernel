@@ -174,6 +174,18 @@ export const UI = {
       "π(" + d.n.toLocaleString() + ") = <b>" + d.count.toLocaleString() + "</b> primes · " +
       d.ms + "ms · <b>" + d.ver + "</b>";
   },
+  // ---- analyzer (telemetry watchdog) live card line ----
+  analyzerStat:function(d){
+    var el = document.getElementById("analyzer-live"); if(!el) return;
+    el.className = "stat-line analyzer-live";
+    el.innerHTML = "μ <b>" + d.mean + "°</b> · σ <b>" + d.sd + "</b> · z <b>" + d.z + "</b> · win " + d.n + "/" + d.cap;
+  },
+  analyzerAlert:function(d){
+    var el = document.getElementById("analyzer-live"); if(!el) return;
+    if(d.level === "stale"){   el.className = "stat-line analyzer-live stale";   el.innerHTML = "input lost · silent " + d.since + "ms"; }
+    else if(d.level === "recover"){ el.className = "stat-line analyzer-live recover"; el.innerHTML = "input restored"; }
+    else if(d.level === "spike"){ el.className = "stat-line analyzer-live spike"; el.innerHTML = "spike " + d.temp + "° · z=" + d.z; }
+  },
   // ---- race panel (head-to-head) ----
   wasmMode:function(mode){
     document.getElementById("fc-wasm-tech").textContent =
@@ -196,7 +208,7 @@ export const UI = {
   renderCards:function(){
     var grid = document.getElementById("svc-grid");
     grid.innerHTML = "";
-    ["clock","telemetry","compute","wasmcompute","jsminer"].forEach(function(name){
+    ["clock","compute","telemetry","jsminer","wasmcompute","analyzer"].forEach(function(name){
       var s = Supervisor.state[name], spec = Supervisor.specs[name], rec = Kernel.services[name];
       var host = rec ? rec.host : (spec.backend==="worker"&&workers.ok?"worker":"local");
       var el = document.createElement("div"); el.className="svc";
@@ -210,6 +222,7 @@ export const UI = {
         '</div>'+
         '<div class="status-word '+s.status+'">'+s.status+'</div>'+
         '<div class="stat-line">restarts <b>'+s.restarts+'</b>'+(name==="compute"?('  ·  ver <b>'+spec.version+'</b>'):'')+'</div>'+
+        (name==="analyzer"?'<div class="stat-line analyzer-live" id="analyzer-live">watching telemetry…</div>':'')+
         '<div class="acts">'+
           '<button class="mini warn" data-act="hang" data-svc="'+name+'">Hang</button>'+
           '<button class="mini danger" data-act="crash" data-svc="'+name+'">Crash</button>'+
